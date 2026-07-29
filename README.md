@@ -176,6 +176,14 @@ AI Agent 已经能帮你写代码、改文档、管项目——但你让它去�
 
 你给一个新 Agent 装环境的时候，总要花时间去找工具、装依赖、调配置——Twitter 用什么读？Reddit 怎么登录？小红书的 CLI 停更了换什么？每次都要重新踩一遍。Agent Reach 做的事情很简单：**当下最稳的接入方式，我们替你选好、装好、体检好。接入方式会换代（2026 年 3 月一批单平台 CLI 集体停更，我们换了路由），你不用操心。**
 
+### 结构化执行 API（维护者集成）
+
+`agent_reach.execution.v1` 提供一个附加的、封闭的 Python 执行合同，供需要
+自行负责授权、网络/进程隔离和审计的宿主集成。首个切片只包含 RSS
+`read.feed` 与 `browse.entries`，并且只接受宿主已经安全获取的有界字节；它
+不会开放命令、argv、Cookie、凭据、endpoint 或 backend 选择。完整合同与
+fork 跟随上游的 rebase 规则见 [execution v1 guide](docs/execution-v1.md)。
+
 ### 🔌 每个平台 = 首选 + 备选的有序后端列表
 
 换接入方式 = 调整列表顺序，不是重写代码。`agent-reach doctor` 会告诉你每个平台**当前在用哪个后端**。
