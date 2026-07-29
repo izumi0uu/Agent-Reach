@@ -111,9 +111,11 @@ def test_feedparser_receives_bytesio_without_network_or_file_dispatch(
     monkeypatch.setattr(
         rss_execution.importlib,
         "import_module",
-        lambda name: SimpleNamespace(__version__="6.0.12", parse=parse)
-        if name == "feedparser"
-        else unexpected_io(name),
+        lambda name: (
+            SimpleNamespace(__version__="6.0.12", parse=parse)
+            if name == "feedparser"
+            else unexpected_io(name)
+        ),
     )
 
     result = execute(
