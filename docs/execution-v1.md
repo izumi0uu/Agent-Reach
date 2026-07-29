@@ -67,3 +67,7 @@ run the complete Agent Reach suite and every consuming host's compatibility
 audit. Preserve each consumed revision with an immutable integration tag and
 pin consumers to the exact reviewed commit. Only the rebased development
 branch may be updated with force-with-lease.
+
+The PEP 517 build backend is also an exact project pin. Keep that pin reviewed
+and run the clean-wheel gate after every update so installing the same VCS
+commit cannot silently select a different Hatchling release later.
