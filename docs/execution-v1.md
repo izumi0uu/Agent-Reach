@@ -63,6 +63,12 @@ envelope, and returns only the closed `bilibili.video.v1` projection. The marker
 is explicit host authority, not an OS sandbox: the host remains responsible for
 private HOME/XDG/TMP state, proxy and credential isolation, hard timeout and
 process cleanup, output framing, and independent result validation.
+Because Click output capture temporarily replaces process-global stdout, the
+executor permits only one active Bilibili backend invocation per process. A
+call that overlaps that invocation fails closed as `transient`; calls may
+otherwise validate and project results concurrently. Hosts must still prevent
+unrelated concurrent stdout writers, so a dedicated one-request worker remains
+the recommended containment boundary.
 
 Success and failure are immutable discriminated variants. A success identifies
 the selected backend and version. A failure contains only protocol,

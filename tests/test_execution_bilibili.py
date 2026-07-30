@@ -8,6 +8,7 @@ import sys
 from collections.abc import Callable, Mapping
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
+from threading import Event, Thread
 from types import SimpleNamespace
 from typing import cast
 
@@ -331,6 +332,91 @@ def test_real_click_parser_keeps_leading_hyphen_query_positional(
     assert isinstance(result, ExecutionSuccessV1)
     assert result.items[0].fields["native_id"] == VIDEO_ID
     assert calls == [("-danger", 1)]
+
+
+def test_overlapping_backend_invocation_fails_closed_and_releases_stdout_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_entered = Event()
+    release_first = Event()
+    second_finished = Event()
+    calls: list[str] = []
+    results: dict[str, ExecutionSuccessV1 | ExecutionFailureV1] = {}
+    original_stdout = sys.stdout
+
+    def metadata(_: str) -> SimpleNamespace:
+        return SimpleNamespace(version="0.6.2", entry_points=(_entry_point(),))
+
+    def main(**kwargs: object) -> None:
+        args = kwargs.get("args")
+        if not isinstance(args, list) or not args:
+            raise AssertionError("missing backend arguments")
+        query = args[-1]
+        if not isinstance(query, str):
+            raise AssertionError("invalid backend query")
+        calls.append(query)
+        if query == "first":
+            first_entered.set()
+            if not release_first.wait(2):
+                raise AssertionError("first backend invocation was not released")
+            bvid = VIDEO_ID
+        elif query == "second":
+            bvid = OTHER_VIDEO_ID
+        else:
+            raise AssertionError("unexpected backend query")
+        sys.stdout.write(
+            json.dumps(
+                _success([_search_item(id=bvid, bvid=bvid, title=query)]),
+                ensure_ascii=False,
+            )
+        )
+
+    def load(_: str) -> object:
+        return SimpleNamespace(cli=SimpleNamespace(main=main))
+
+    def run(query: str, *, finished: Event | None = None) -> None:
+        results[query] = execute(_request("search.videos", query=query, limit=1), _context())
+        if finished is not None:
+            finished.set()
+
+    monkeypatch.setattr(bilibili_execution, "distribution", metadata)
+    monkeypatch.setattr(bilibili_execution, "import_module", load)
+
+    first = Thread(target=run, args=("first",), daemon=True)
+    second = Thread(
+        target=run,
+        args=("second",),
+        kwargs={"finished": second_finished},
+        daemon=True,
+    )
+    first.start()
+    try:
+        assert first_entered.wait(1)
+        second.start()
+        assert second_finished.wait(1)
+    finally:
+        release_first.set()
+        first.join(2)
+        if second.ident is not None:
+            second.join(2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    first_result = results["first"]
+    competing_result = results["second"]
+    assert isinstance(first_result, ExecutionSuccessV1)
+    assert isinstance(competing_result, ExecutionFailureV1)
+    assert competing_result.error_code == "transient"
+    assert first_result.items[0].fields["native_id"] == VIDEO_ID
+    assert calls == ["first"]
+    assert sys.stdout is original_stdout
+
+    recovered = execute(_request("search.videos", query="second", limit=1), _context())
+
+    assert isinstance(recovered, ExecutionSuccessV1)
+    assert recovered.items[0].fields["native_id"] == OTHER_VIDEO_ID
+    assert calls == ["first", "second"]
+    assert sys.stdout is original_stdout
 
 
 def test_clean_process_discovery_and_rejections_do_not_import_bilibili_runtime() -> None:

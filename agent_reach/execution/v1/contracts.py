@@ -30,9 +30,10 @@ MAX_PUBLISHED_CHARACTERS: Final = 512
 
 _MAX_BILIBILI_OUTPUT_BYTES: Final = 512 * 1_024
 _MAX_BILIBILI_AUTHOR_CHARACTERS: Final = 1_024
+_MAX_BILIBILI_QUERY_CHARACTERS: Final = 4_096
 
 _MAX_ARGUMENTS: Final = 8
-_MAX_ARGUMENT_STRING_CHARACTERS: Final = 4_096
+_MAX_ARGUMENT_STRING_CHARACTERS: Final = _MAX_BILIBILI_QUERY_CHARACTERS
 _MAX_ARGUMENT_INTEGER: Final = 1_000_000_000
 _MAX_HOST_CAPABILITIES: Final = 8
 _MAX_RESULT_INTEGER: Final = (1 << 53) - 1
@@ -307,52 +308,10 @@ _RESULT_SCHEMA_FIELDS: Final[Mapping[str, Mapping[str, _ResultFieldRule]]] = Map
     }
 )
 
-
-@dataclass(frozen=True, slots=True)
-class ExecutionItemV1:
-    """One schema-tagged result item with an exact scalar field set."""
-
-    schema_id: str
-    fields: Mapping[str, ResultScalarV1]
-
-    def __post_init__(self) -> None:
-        expected = _RESULT_SCHEMA_FIELDS.get(self.schema_id)
-        if expected is None or not isinstance(self.fields, Mapping):
-            raise ValueError("invalid execution item")
-        try:
-            names = set(self.fields)
-        except (TypeError, ValueError):
-            raise ValueError("invalid execution item") from None
-        if names != set(expected):
-            raise ValueError("invalid execution item")
-        frozen: dict[str, ResultScalarV1] = {}
-        for name, rule in expected.items():
-            value = self.fields[name]
-            if not _valid_result_scalar(value, rule):
-                raise ValueError("invalid execution item")
-            frozen[name] = value
-        object.__setattr__(self, "fields", MappingProxyType(frozen))
-
-
-@dataclass(frozen=True, slots=True)
-class ExecutionSuccessV1:
-    """Closed successful execution with exact backend provenance."""
-
-    protocol_version: str
-    source: str
-    operation: str
-    backend_id: str
-    backend_version: str
-    items: tuple[ExecutionItemV1, ...]
-    truncated: bool = False
-    partial_error_code: ExecutionErrorCodeV1 | None = None
-
-    def __post_init__(self) -> None:
-        try:
-            items = tuple(self.items)
-        except TypeError:
-            raise ValueError("invalid execution success") from None
-        expected_contract = {
+_ExpectedSuccessContract: TypeAlias = tuple[str, str, str, int, int, bool, int]
+_EXPECTED_SUCCESS_CONTRACT: Final[Mapping[tuple[str, str], _ExpectedSuccessContract]] = (
+    MappingProxyType(
+        {
             ("rss", "read.feed"): (
                 "feedparser",
                 "6.0.12",
@@ -407,7 +366,56 @@ class ExecutionSuccessV1:
                 False,
                 _MAX_BILIBILI_OUTPUT_BYTES,
             ),
-        }.get((self.source, self.operation))
+        }
+    )
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionItemV1:
+    """One schema-tagged result item with an exact scalar field set."""
+
+    schema_id: str
+    fields: Mapping[str, ResultScalarV1]
+
+    def __post_init__(self) -> None:
+        expected = _RESULT_SCHEMA_FIELDS.get(self.schema_id)
+        if expected is None or not isinstance(self.fields, Mapping):
+            raise ValueError("invalid execution item")
+        try:
+            names = set(self.fields)
+        except (TypeError, ValueError):
+            raise ValueError("invalid execution item") from None
+        if names != set(expected):
+            raise ValueError("invalid execution item")
+        frozen: dict[str, ResultScalarV1] = {}
+        for name, rule in expected.items():
+            value = self.fields[name]
+            if not _valid_result_scalar(value, rule):
+                raise ValueError("invalid execution item")
+            frozen[name] = value
+        object.__setattr__(self, "fields", MappingProxyType(frozen))
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionSuccessV1:
+    """Closed successful execution with exact backend provenance."""
+
+    protocol_version: str
+    source: str
+    operation: str
+    backend_id: str
+    backend_version: str
+    items: tuple[ExecutionItemV1, ...]
+    truncated: bool = False
+    partial_error_code: ExecutionErrorCodeV1 | None = None
+
+    def __post_init__(self) -> None:
+        try:
+            items = tuple(self.items)
+        except TypeError:
+            raise ValueError("invalid execution success") from None
+        expected_contract = _EXPECTED_SUCCESS_CONTRACT.get((self.source, self.operation))
         if expected_contract is None:
             raise ValueError("invalid execution success")
         (
@@ -524,14 +532,10 @@ def _backend_for_operation(
 ) -> tuple[str, str] | None:
     if type(source) is not str or type(operation) is not str:
         return None
-    return {
-        ("rss", "read.feed"): ("feedparser", "6.0.12"),
-        ("rss", "browse.entries"): ("feedparser", "6.0.12"),
-        ("bilibili", "search.videos"): ("bili-cli", "0.6.2"),
-        ("bilibili", "read.video"): ("bili-cli", "0.6.2"),
-        ("bilibili", "browse.hot"): ("bili-cli", "0.6.2"),
-        ("bilibili", "browse.rank"): ("bili-cli", "0.6.2"),
-    }.get((source, operation))
+    contract = _EXPECTED_SUCCESS_CONTRACT.get((source, operation))
+    if contract is None:
+        return None
+    return contract[0], contract[1]
 
 
 def _valid_bilibili_video_url(value: object) -> bool:

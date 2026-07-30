@@ -9,6 +9,7 @@ from collections.abc import Callable, Mapping
 from contextlib import redirect_stdout
 from importlib import import_module
 from importlib.metadata import PackageNotFoundError, distribution
+from threading import Lock
 from types import MappingProxyType
 from typing import Final, cast
 
@@ -39,6 +40,7 @@ _MAX_JSON_DEPTH: Final = 12
 _MAX_JSON_ITEMS: Final = 64
 _MAX_STRING_BYTES: Final = 64 * 1024
 _MAX_RESULT_INTEGER: Final = (1 << 53) - 1
+_BACKEND_INVOCATION_LOCK: Final = Lock()
 
 _BACKEND_ERROR_CODES: Final[Mapping[str, ExecutionErrorCodeV1]] = MappingProxyType(
     {
@@ -150,22 +152,27 @@ def _invoke_backend(
 ) -> Mapping[str, object]:
     sink = _BoundedTextSink()
     exited = False
+    if not _BACKEND_INVOCATION_LOCK.acquire(blocking=False):
+        raise _BackendInvocationError("backend invocation already active")
     try:
-        with redirect_stdout(sink):
-            try:
-                main(
-                    args=list(_argv(request, context)),
-                    prog_name="bili",
-                    standalone_mode=False,
-                )
-            except SystemExit as error:
-                if type(error.code) is not int or error.code != 1:
-                    raise _BackendContractError("backend exit invalid") from None
-                exited = True
-    except _BackendContractError:
-        raise
-    except Exception:
-        raise _BackendInvocationError("backend invocation failed") from None
+        try:
+            with redirect_stdout(sink):
+                try:
+                    main(
+                        args=list(_argv(request, context)),
+                        prog_name="bili",
+                        standalone_mode=False,
+                    )
+                except SystemExit as error:
+                    if type(error.code) is not int or error.code != 1:
+                        raise _BackendContractError("backend exit invalid") from None
+                    exited = True
+        except _BackendContractError:
+            raise
+        except Exception:
+            raise _BackendInvocationError("backend invocation failed") from None
+    finally:
+        _BACKEND_INVOCATION_LOCK.release()
 
     envelope = _validated_backend_envelope(
         _load_json(sink.getvalue().encode("utf-8", errors="strict"))
