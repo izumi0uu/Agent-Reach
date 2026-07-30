@@ -179,10 +179,14 @@ AI Agent 已经能帮你写代码、改文档、管项目——但你让它去�
 ### 结构化执行 API（维护者集成）
 
 `agent_reach.execution.v1` 提供一个附加的、封闭的 Python 执行合同，供需要
-自行负责授权、网络/进程隔离和审计的宿主集成。首个切片只包含 RSS
-`read.feed` 与 `browse.entries`，并且只接受宿主已经安全获取的有界字节；它
-不会开放命令、argv、Cookie、凭据、endpoint 或 backend 选择。完整合同与
-fork 跟随上游的 rebase 规则见 [execution v1 guide](docs/execution-v1.md)。
+自行负责授权、网络/进程隔离和审计的宿主集成。当前切片包含 RSS 的
+`read.feed`、`browse.entries`，以及 Bilibili 的 `search.videos`、
+`read.video`、`browse.hot`、`browse.rank`。RSS 只接受宿主已经安全获取的
+有界字节；Bilibili 只接受无数据的显式网络授权标记，并固定调用宿主安装的
+`bilibili-cli==0.6.2`。该标记不提供 OS 隔离，HOME、代理、凭据、超时和进程
+清理由宿主负责。合同不会开放命令、argv、Cookie、凭据、endpoint 或 backend
+选择。完整合同与 fork 跟随上游的 rebase 规则见
+[execution v1 guide](docs/execution-v1.md)。
 
 ### 🔌 每个平台 = 首选 + 备选的有序后端列表
 

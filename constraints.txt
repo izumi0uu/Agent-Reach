@@ -10,6 +10,7 @@ PyYAML==6.0.3
 rich==14.3.2
 yt-dlp==2026.07.04
 yt-dlp-ejs==0.8.0
+bilibili-cli==0.6.2
 
 pytest==8.0.0
 ruff==0.15.1
