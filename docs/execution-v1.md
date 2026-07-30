@@ -13,6 +13,7 @@ from agent_reach.execution.v1 import (
     ExecutionContextV1,
     ExecutionRequestV1,
     FetchedDocumentV1,
+    NetworkAccessV1,
     execute,
     list_capabilities,
 )
@@ -29,18 +30,39 @@ context = ExecutionContextV1(
     )
 )
 result = execute(request, context)
+
+bilibili_request = ExecutionRequestV1(
+    PROTOCOL_VERSION,
+    "bilibili",
+    "search.videos",
+    {"query": "agent runtime", "limit": 5},
+)
+bilibili_result = execute(
+    bilibili_request,
+    ExecutionContextV1((NetworkAccessV1(),)),
+)
 ```
 
-The v1 registry contains only `rss:read.feed` and `rss:browse.entries`.
-Requests have closed operation-specific arguments. They cannot choose a
-backend, command, executable, argv, transport, endpoint, credential, browser
-profile, Cookie, or fallback.
+The v1 registry contains six operations: `rss:read.feed`,
+`rss:browse.entries`, `bilibili:search.videos`, `bilibili:read.video`,
+`bilibili:browse.hot`, and `bilibili:browse.rank`. Requests have closed
+operation-specific arguments. They cannot choose a backend, command,
+executable, argv, transport, endpoint, credential, browser profile, Cookie, or
+fallback.
 
 The host must fetch and validate the document before execution. RSS receives
 one non-empty `FetchedDocumentV1` of at most 1 MiB. Its public HTTP(S)
 `content_location` has no userinfo, query, fragment, or non-default port. The
 executor never opens that location: it passes only `BytesIO(body)` to exact
 `feedparser==6.0.12` and returns schema-tagged bounded fields.
+
+Bilibili execution requires one data-free `NetworkAccessV1` and a host-installed
+`bilibili-cli==0.6.2`. The executor maps each registered operation to fixed
+Click arguments, validates the exact console entry point and bounded JSON
+envelope, and returns only the closed `bilibili.video.v1` projection. The marker
+is explicit host authority, not an OS sandbox: the host remains responsible for
+private HOME/XDG/TMP state, proxy and credential isolation, hard timeout and
+process cleanup, output framing, and independent result validation.
 
 Success and failure are immutable discriminated variants. A success identifies
 the selected backend and version. A failure contains only protocol,
@@ -51,12 +73,12 @@ to the host instead of being converted into a backend result.
 
 ## Discovery and compatibility
 
-`list_capabilities()` is static. It does not import `feedparser`, inspect
-configuration, read credentials, access the network or filesystem, or start a
-process. Hosts should validate the exact protocol, descriptors, schemas,
-limits, backend identity, dependency commit, and installed backend version
-before enabling an operation. A newly published capability is not authority
-for a host to enable it automatically.
+`list_capabilities()` is static. It does not import `feedparser` or `bili_cli`,
+inspect configuration, read credentials, access the network or filesystem, or
+start a process. Hosts should validate the exact protocol, descriptors,
+schemas, limits, backend identity, dependency commit, and installed backend
+version before enabling an operation. A newly published capability is not
+authority for a host to enable it automatically.
 
 ## Fork update discipline
 

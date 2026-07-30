@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -12,11 +13,12 @@ from urllib.parse import urlsplit
 
 PROTOCOL_VERSION: Final = "v1"
 FETCHED_DOCUMENT_CAPABILITY: Final = "fetched_document.v1"
+NETWORK_ACCESS_CAPABILITY: Final = "network_access.v1"
 
 MAX_DOCUMENT_BYTES: Final = 1_048_576
 MAX_METADATA_BYTES: Final = 16_384
 MAX_OUTPUT_BYTES: Final = 1_048_576
-MAX_ITEMS: Final = 21
+MAX_ITEMS: Final = 50
 MAX_CONTENT_TYPE_CHARACTERS: Final = 512
 MAX_CONTENT_LOCATION_CHARACTERS: Final = 8_192
 MAX_TEXT_CHARACTERS: Final = 16_000
@@ -26,12 +28,18 @@ MAX_NATIVE_ID_CHARACTERS: Final = 512
 MAX_AUTHOR_CHARACTERS: Final = 2_048
 MAX_PUBLISHED_CHARACTERS: Final = 512
 
+_MAX_BILIBILI_OUTPUT_BYTES: Final = 512 * 1_024
+_MAX_BILIBILI_AUTHOR_CHARACTERS: Final = 1_024
+
 _MAX_ARGUMENTS: Final = 8
-_MAX_ARGUMENT_STRING_CHARACTERS: Final = 1_024
+_MAX_ARGUMENT_STRING_CHARACTERS: Final = 4_096
 _MAX_ARGUMENT_INTEGER: Final = 1_000_000_000
 _MAX_HOST_CAPABILITIES: Final = 8
+_MAX_RESULT_INTEGER: Final = (1 << 53) - 1
 _IDENTIFIER: Final = re.compile(r"^[a-z][a-z0-9_.]{0,63}$")
+_BACKEND_IDENTIFIER: Final = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 _ARGUMENT_NAME: Final = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_BVID: Final = re.compile(r"BV[A-Za-z0-9]{10}")
 
 ExecutionErrorCodeV1 = Literal[
     "unsupported_protocol_version",
@@ -43,6 +51,12 @@ ExecutionErrorCodeV1 = Literal[
     "backend_incompatible",
     "deadline_exceeded",
     "cancelled",
+    "invalid_input",
+    "not_found",
+    "authentication",
+    "authorization",
+    "rate_limit",
+    "transient",
     "permanent",
     "backend_contract_violation",
 ]
@@ -57,13 +71,19 @@ EXECUTION_ERROR_CODES: Final[frozenset[str]] = frozenset(
         "backend_incompatible",
         "deadline_exceeded",
         "cancelled",
+        "invalid_input",
+        "not_found",
+        "authentication",
+        "authorization",
+        "rate_limit",
+        "transient",
         "permanent",
         "backend_contract_violation",
     }
 )
 
 ArgumentScalarV1: TypeAlias = str | int | bool | None
-ResultScalarV1: TypeAlias = str | None
+ResultScalarV1: TypeAlias = str | int | None
 CheckpointV1: TypeAlias = Callable[[], None]
 
 
@@ -108,7 +128,7 @@ class OperationCapabilityV1:
             or not _valid_identifier(self.argument_schema_id)
             or not self.result_schema_ids
             or any(not _valid_identifier(value) for value in self.result_schema_ids)
-            or not _valid_identifier(self.backend_id)
+            or not _valid_backend_identifier(self.backend_id)
             or not _valid_version(self.backend_version)
             or not self.required_host_capabilities
             or any(not _valid_identifier(value) for value in self.required_host_capabilities)
@@ -191,6 +211,11 @@ class FetchedDocumentV1:
 
 
 @dataclass(frozen=True, slots=True)
+class NetworkAccessV1:
+    """Data-free host approval to invoke a registered network backend."""
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionLimitsV1:
     """Host-selected limits that may only narrow descriptor hard limits."""
 
@@ -207,7 +232,7 @@ class ExecutionLimitsV1:
             raise ValueError("invalid execution limits")
 
 
-HostCapabilityV1: TypeAlias = FetchedDocumentV1
+HostCapabilityV1: TypeAlias = FetchedDocumentV1 | NetworkAccessV1
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,28 +252,56 @@ class ExecutionContextV1:
             len(capabilities) > _MAX_HOST_CAPABILITIES
             or not callable(self.checkpoint)
             or type(self.limits) is not ExecutionLimitsV1
+            or any(
+                type(capability) not in {FetchedDocumentV1, NetworkAccessV1}
+                for capability in capabilities
+            )
+            or len({type(capability) for capability in capabilities}) != len(capabilities)
         ):
             raise ValueError("invalid execution context")
         object.__setattr__(self, "host_capabilities", capabilities)
 
 
-_RESULT_SCHEMA_FIELDS: Final[Mapping[str, Mapping[str, int]]] = MappingProxyType(
+_ResultFieldKind: TypeAlias = Literal["text", "integer"]
+_ResultFieldRule: TypeAlias = tuple[_ResultFieldKind, int, bool]
+
+
+def _text_rule(maximum: int, *, nullable: bool) -> _ResultFieldRule:
+    return ("text", maximum, nullable)
+
+
+def _integer_rule(*, nullable: bool = False) -> _ResultFieldRule:
+    return ("integer", _MAX_RESULT_INTEGER, nullable)
+
+
+_RESULT_SCHEMA_FIELDS: Final[Mapping[str, Mapping[str, _ResultFieldRule]]] = MappingProxyType(
     {
         "rss.feed.v1": MappingProxyType(
             {
-                "text": MAX_TEXT_CHARACTERS,
-                "title": MAX_TITLE_CHARACTERS,
-                "url": MAX_URL_CHARACTERS,
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=True),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=True),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=True),
             }
         ),
         "rss.entry.v1": MappingProxyType(
             {
-                "text": MAX_TEXT_CHARACTERS,
-                "native_id": MAX_NATIVE_ID_CHARACTERS,
-                "title": MAX_TITLE_CHARACTERS,
-                "url": MAX_URL_CHARACTERS,
-                "author": MAX_AUTHOR_CHARACTERS,
-                "published_at": MAX_PUBLISHED_CHARACTERS,
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=True),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=True),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=True),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=True),
+                "author": _text_rule(MAX_AUTHOR_CHARACTERS, nullable=True),
+                "published_at": _text_rule(MAX_PUBLISHED_CHARACTERS, nullable=True),
+            }
+        ),
+        "bilibili.video.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=False),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "author": _text_rule(_MAX_BILIBILI_AUTHOR_CHARACTERS, nullable=True),
+                "duration_seconds": _integer_rule(),
+                "view_count": _integer_rule(),
             }
         ),
     }
@@ -273,13 +326,9 @@ class ExecutionItemV1:
         if names != set(expected):
             raise ValueError("invalid execution item")
         frozen: dict[str, ResultScalarV1] = {}
-        for name, maximum in expected.items():
+        for name, rule in expected.items():
             value = self.fields[name]
-            if value is not None and (
-                type(value) is not str
-                or not 0 < len(value) <= maximum
-                or _contains_invalid_scalar(value)
-            ):
+            if not _valid_result_scalar(value, rule):
                 raise ValueError("invalid execution item")
             frozen[name] = value
         object.__setattr__(self, "fields", MappingProxyType(frozen))
@@ -303,25 +352,90 @@ class ExecutionSuccessV1:
             items = tuple(self.items)
         except TypeError:
             raise ValueError("invalid execution success") from None
-        expected_schema = {
-            ("rss", "read.feed"): ("rss.feed.v1", 1, 1),
-            ("rss", "browse.entries"): ("rss.entry.v1", 0, MAX_ITEMS),
+        expected_contract = {
+            ("rss", "read.feed"): (
+                "feedparser",
+                "6.0.12",
+                "rss.feed.v1",
+                1,
+                1,
+                True,
+                MAX_OUTPUT_BYTES,
+            ),
+            ("rss", "browse.entries"): (
+                "feedparser",
+                "6.0.12",
+                "rss.entry.v1",
+                0,
+                21,
+                True,
+                MAX_OUTPUT_BYTES,
+            ),
+            ("bilibili", "search.videos"): (
+                "bili-cli",
+                "0.6.2",
+                "bilibili.video.v1",
+                0,
+                50,
+                False,
+                _MAX_BILIBILI_OUTPUT_BYTES,
+            ),
+            ("bilibili", "read.video"): (
+                "bili-cli",
+                "0.6.2",
+                "bilibili.video.v1",
+                1,
+                1,
+                False,
+                _MAX_BILIBILI_OUTPUT_BYTES,
+            ),
+            ("bilibili", "browse.hot"): (
+                "bili-cli",
+                "0.6.2",
+                "bilibili.video.v1",
+                0,
+                50,
+                False,
+                _MAX_BILIBILI_OUTPUT_BYTES,
+            ),
+            ("bilibili", "browse.rank"): (
+                "bili-cli",
+                "0.6.2",
+                "bilibili.video.v1",
+                0,
+                50,
+                False,
+                _MAX_BILIBILI_OUTPUT_BYTES,
+            ),
         }.get((self.source, self.operation))
+        if expected_contract is None:
+            raise ValueError("invalid execution success")
+        (
+            backend_id,
+            backend_version,
+            schema_id,
+            minimum,
+            maximum,
+            allows_partial,
+            maximum_output_bytes,
+        ) = expected_contract
         if (
             self.protocol_version != PROTOCOL_VERSION
-            or self.backend_id != "feedparser"
-            or self.backend_version != "6.0.12"
-            or expected_schema is None
+            or self.backend_id != backend_id
+            or self.backend_version != backend_version
             or type(self.truncated) is not bool
-            or self.partial_error_code not in {None, "permanent"}
+            or (
+                self.partial_error_code is not None
+                and (not allows_partial or self.partial_error_code != "permanent")
+            )
             or any(type(item) is not ExecutionItemV1 for item in items)
         ):
             raise ValueError("invalid execution success")
-        schema_id, minimum, maximum = expected_schema
         if (
             not minimum <= len(items) <= maximum
             or any(item.schema_id != schema_id for item in items)
-            or _result_payload_size(items) > MAX_OUTPUT_BYTES
+            or (self.source == "bilibili" and any(not _valid_bilibili_item(item) for item in items))
+            or _result_payload_size(items) > maximum_output_bytes
         ):
             raise ValueError("invalid execution success")
         object.__setattr__(self, "items", items)
@@ -341,6 +455,7 @@ class ExecutionFailureV1:
     def __post_init__(self) -> None:
         identity_present = self.source is not None or self.operation is not None
         backend_present = self.backend_id is not None or self.backend_version is not None
+        expected_backend = _backend_for_operation(self.source, self.operation)
         if (
             self.protocol_version != PROTOCOL_VERSION
             or (
@@ -350,8 +465,8 @@ class ExecutionFailureV1:
             or (
                 backend_present
                 and (
-                    self.backend_id != "feedparser"
-                    or self.backend_version != "6.0.12"
+                    expected_backend is None
+                    or (self.backend_id, self.backend_version) != expected_backend
                     or not identity_present
                 )
             )
@@ -365,6 +480,10 @@ ExecutionResultV1: TypeAlias = ExecutionSuccessV1 | ExecutionFailureV1
 
 def _valid_identifier(value: object) -> bool:
     return type(value) is str and _IDENTIFIER.fullmatch(value) is not None
+
+
+def _valid_backend_identifier(value: object) -> bool:
+    return type(value) is str and _BACKEND_IDENTIFIER.fullmatch(value) is not None
 
 
 def _valid_version(value: object) -> bool:
@@ -385,6 +504,61 @@ def _valid_argument_scalar(value: object) -> bool:
         type(value) is str
         and len(value) <= _MAX_ARGUMENT_STRING_CHARACTERS
         and not _contains_invalid_scalar(value)
+    )
+
+
+def _valid_result_scalar(value: object, rule: _ResultFieldRule) -> bool:
+    kind, maximum, nullable = rule
+    if value is None:
+        return nullable
+    if kind == "integer":
+        return type(value) is int and 0 <= value <= maximum
+    return bool(
+        type(value) is str and 0 < len(value) <= maximum and not _contains_invalid_scalar(value)
+    )
+
+
+def _backend_for_operation(
+    source: object,
+    operation: object,
+) -> tuple[str, str] | None:
+    if type(source) is not str or type(operation) is not str:
+        return None
+    return {
+        ("rss", "read.feed"): ("feedparser", "6.0.12"),
+        ("rss", "browse.entries"): ("feedparser", "6.0.12"),
+        ("bilibili", "search.videos"): ("bili-cli", "0.6.2"),
+        ("bilibili", "read.video"): ("bili-cli", "0.6.2"),
+        ("bilibili", "browse.hot"): ("bili-cli", "0.6.2"),
+        ("bilibili", "browse.rank"): ("bili-cli", "0.6.2"),
+    }.get((source, operation))
+
+
+def _valid_bilibili_video_url(value: object) -> bool:
+    if type(value) is not str or not value.isascii() or len(value) > 128:
+        return False
+    try:
+        parsed = urlsplit(value)
+    except (UnicodeError, ValueError):
+        return False
+    parts = parsed.path.split("/")
+    return bool(
+        parsed.scheme == "https"
+        and parsed.netloc == "www.bilibili.com"
+        and not parsed.query
+        and not parsed.fragment
+        and len(parts) == 3
+        and parts[1] == "video"
+        and _BVID.fullmatch(parts[2])
+    )
+
+
+def _valid_bilibili_item(item: ExecutionItemV1) -> bool:
+    native_id = item.fields.get("native_id")
+    return bool(
+        type(native_id) is str
+        and _BVID.fullmatch(native_id)
+        and item.fields.get("url") == f"https://www.bilibili.com/video/{native_id}"
     )
 
 
@@ -451,12 +625,21 @@ def _is_global_address(
 def _result_payload_size(items: tuple[ExecutionItemV1, ...]) -> int:
     size = 1_024
     for item in items:
-        size += 256 + len(item.schema_id)
+        size += 256 + _json_scalar_size(item.schema_id)
         for name, value in item.fields.items():
-            size += len(name) + 16
-            if value is not None:
-                size += len(value.encode("utf-8", errors="strict"))
+            size += _json_scalar_size(name) + 16 + _json_scalar_size(value)
     return size
+
+
+def _json_scalar_size(value: str | int | None) -> int:
+    return len(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8", errors="strict")
+    )
 
 
 def _contains_control(value: str) -> bool:
