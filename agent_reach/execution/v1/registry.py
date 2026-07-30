@@ -8,6 +8,7 @@ from typing import Final
 from .contracts import (
     _MAX_BILIBILI_AUTHOR_CHARACTERS,
     _MAX_BILIBILI_OUTPUT_BYTES,
+    _MAX_BILIBILI_QUERY_CHARACTERS,
     FETCHED_DOCUMENT_CAPABILITY,
     MAX_AUTHOR_CHARACTERS,
     MAX_CONTENT_LOCATION_CHARACTERS,
@@ -228,7 +229,7 @@ def _valid_arguments(
         return bool(
             type(query) is str
             and query == query.strip()
-            and 1 <= len(query) <= 4_096
+            and 1 <= len(query) <= _MAX_BILIBILI_QUERY_CHARACTERS
             and type(limit) is int
             and 1 <= limit <= capability.maximum_items
         )
