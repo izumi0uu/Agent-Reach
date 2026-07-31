@@ -64,6 +64,34 @@ def _bilibili_item(
     )
 
 
+def _youtube_item(
+    *,
+    native_id: str = "dQw4w9WgXcQ",
+    url: str | None = None,
+    text: object = "description",
+    title: object = "title",
+    author: object = None,
+    published_at: object = None,
+    duration_seconds: object = None,
+    view_count: object = None,
+    comment_count: object = None,
+) -> ExecutionItemV1:
+    return ExecutionItemV1(
+        "youtube.video.v1",
+        {
+            "text": text,
+            "native_id": native_id,
+            "title": title,
+            "url": url or f"https://www.youtube.com/watch?v={native_id}",
+            "author": author,
+            "published_at": published_at,
+            "duration_seconds": duration_seconds,
+            "view_count": view_count,
+            "comment_count": comment_count,
+        },  # type: ignore[arg-type]
+    )
+
+
 def test_capability_discovery_is_static_closed_and_io_free(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -144,14 +172,24 @@ def test_capability_discovery_is_static_closed_and_io_free(
             "0.6.2",
             (NETWORK_ACCESS_CAPABILITY,),
         ),
+        (
+            "youtube",
+            "read.video",
+            "youtube.read.video.arguments.v1",
+            ("youtube.video.v1",),
+            "yt-dlp",
+            "2026.7.4",
+            (NETWORK_ACCESS_CAPABILITY,),
+        ),
     ]
     assert all(item.protocol_version == PROTOCOL_VERSION for item in capabilities)
-    assert [item.maximum_items for item in capabilities] == [1, 21, 50, 1, 50, 50]
+    assert [item.maximum_items for item in capabilities] == [1, 21, 50, 1, 50, 50, 1]
     assert all(item.maximum_document_bytes == 1_048_576 for item in capabilities)
     assert all(item.maximum_metadata_bytes == 16_384 for item in capabilities)
     assert [item.maximum_output_bytes for item in capabilities] == [
         1_048_576,
         1_048_576,
+        524_288,
         524_288,
         524_288,
         524_288,
@@ -166,6 +204,7 @@ def test_capability_discovery_is_static_closed_and_io_free(
     assert [item.maximum_author_characters for item in capabilities] == [
         2_048,
         2_048,
+        1_024,
         1_024,
         1_024,
         1_024,
@@ -186,11 +225,15 @@ def denied_home(cls):
     raise AssertionError('ambient home access')
 pathlib.Path.home = classmethod(denied_home)
 from agent_reach.execution.v1 import list_capabilities
-assert len(list_capabilities()) == 6
+assert len(list_capabilities()) == 7
 assert 'feedparser' not in sys.modules
 assert not any(name == 'bili_cli' or name.startswith('bili_cli.') for name in sys.modules)
+assert not any(name == 'yt_dlp' or name.startswith('yt_dlp.') for name in sys.modules)
+assert 'yt_dlp_ejs' not in sys.modules
+assert 'deno' not in sys.modules
 assert 'agent_reach.execution.v1.rss' not in sys.modules
 assert 'agent_reach.execution.v1.bilibili' not in sys.modules
+assert 'agent_reach.execution.v1.youtube' not in sys.modules
 assert 'agent_reach.config' not in sys.modules
 """
 
@@ -344,6 +387,56 @@ def test_bilibili_result_payload_is_capped_to_the_worker_frame_limit() -> None:
         )
     with pytest.raises(ValueError):
         _bilibili_item(author="a" * 1_025)
+
+
+def test_youtube_result_schema_is_closed_nullable_and_identity_correlated() -> None:
+    item = _youtube_item(
+        author="channel",
+        published_at="2009-10-25",
+        duration_seconds=0,
+        view_count=(1 << 53) - 1,
+        comment_count=None,
+    )
+    success = ExecutionSuccessV1(
+        PROTOCOL_VERSION,
+        "youtube",
+        "read.video",
+        "yt-dlp",
+        "2026.7.4",
+        (item,),
+    )
+
+    assert success.items == (item,)
+    for field_name in ("duration_seconds", "view_count", "comment_count"):
+        for invalid in (False, True, -1, 1 << 53, 1.5, "1"):
+            with pytest.raises(ValueError):
+                _youtube_item(**{field_name: invalid})  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        ExecutionItemV1(
+            "youtube.video.v1",
+            {**dict(item.fields), "raw": "private"},
+        )
+    with pytest.raises(ValueError):
+        ExecutionSuccessV1(
+            PROTOCOL_VERSION,
+            "youtube",
+            "read.video",
+            "yt-dlp",
+            "2026.7.4",
+            (_youtube_item(url="https://www.youtube.com/watch?v=aaaaaaaaaaa"),),
+        )
+    for published_at in ("1969-12-31", "2026-02-31"):
+        with pytest.raises(ValueError):
+            ExecutionSuccessV1(
+                PROTOCOL_VERSION,
+                "youtube",
+                "read.video",
+                "yt-dlp",
+                "2026.7.4",
+                (_youtube_item(published_at=published_at),),
+            )
+    with pytest.raises(ValueError):
+        _youtube_item(text="value\x00hidden")
 
 
 def test_error_taxonomy_is_expanded_but_remains_closed_with_exact_provenance() -> None:
@@ -512,6 +605,39 @@ def test_fetched_document_rejects_unsafe_metadata(
         (
             ExecutionRequestV1(
                 PROTOCOL_VERSION,
+                "youtube",
+                "read.video",
+                {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
+            ),
+            ExecutionContextV1(),
+            "host_capability_missing",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "youtube",
+                "read.video",
+                {
+                    "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                    "proxy": "http://private",
+                },
+            ),
+            ExecutionContextV1((NetworkAccessV1(),)),
+            "invalid_request",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "youtube",
+                "read.video",
+                {"url": "https://www.youtube.com/watch?v=%64Qw4w9WgXcQ"},
+            ),
+            ExecutionContextV1((NetworkAccessV1(),)),
+            "invalid_request",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
                 "rss",
                 "browse.entries",
                 {"max_entries": 22},
@@ -581,7 +707,7 @@ def test_dispatch_rejects_unknown_authority_before_backend_import(
         fromlist: tuple[str, ...] = (),
         level: int = 0,
     ) -> object:
-        if level == 1 and name in {"bilibili", "rss"}:
+        if level == 1 and name in {"bilibili", "rss", "youtube"}:
             raise AssertionError(f"rejected request imported {name}")
         return original_import(name, globals_, locals_, fromlist, level)
 
@@ -609,6 +735,15 @@ def test_host_cancellation_propagates_without_backend_execution() -> None:
                 "bilibili",
                 "browse.hot",
                 {"limit": 1},
+            ),
+            (NetworkAccessV1(),),
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "youtube",
+                "read.video",
+                {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
             ),
             (NetworkAccessV1(),),
         ),

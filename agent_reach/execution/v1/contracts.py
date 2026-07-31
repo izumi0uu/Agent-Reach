@@ -7,6 +7,7 @@ import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import date
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 from urllib.parse import urlsplit
@@ -31,6 +32,10 @@ MAX_PUBLISHED_CHARACTERS: Final = 512
 _MAX_BILIBILI_OUTPUT_BYTES: Final = 512 * 1_024
 _MAX_BILIBILI_AUTHOR_CHARACTERS: Final = 1_024
 _MAX_BILIBILI_QUERY_CHARACTERS: Final = 4_096
+_MAX_YOUTUBE_OUTPUT_BYTES: Final = 512 * 1_024
+_MAX_YOUTUBE_TITLE_BYTES: Final = 1_024
+_MAX_YOUTUBE_AUTHOR_BYTES: Final = 1_024
+_MAX_YOUTUBE_AUTHOR_CHARACTERS: Final = 1_024
 
 _MAX_ARGUMENTS: Final = 8
 _MAX_ARGUMENT_STRING_CHARACTERS: Final = _MAX_BILIBILI_QUERY_CHARACTERS
@@ -41,6 +46,8 @@ _IDENTIFIER: Final = re.compile(r"^[a-z][a-z0-9_.]{0,63}$")
 _BACKEND_IDENTIFIER: Final = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 _ARGUMENT_NAME: Final = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _BVID: Final = re.compile(r"BV[A-Za-z0-9]{10}")
+_YOUTUBE_VIDEO_ID: Final = re.compile(r"[A-Za-z0-9_-]{11}")
+_YOUTUBE_VIDEO_URL: Final = re.compile(r"https://www[.]youtube[.]com/watch[?]v=([A-Za-z0-9_-]{11})")
 
 ExecutionErrorCodeV1 = Literal[
     "unsupported_protocol_version",
@@ -305,6 +312,19 @@ _RESULT_SCHEMA_FIELDS: Final[Mapping[str, Mapping[str, _ResultFieldRule]]] = Map
                 "view_count": _integer_rule(),
             }
         ),
+        "youtube.video.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=False),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "author": _text_rule(_MAX_YOUTUBE_AUTHOR_CHARACTERS, nullable=True),
+                "published_at": _text_rule(MAX_PUBLISHED_CHARACTERS, nullable=True),
+                "duration_seconds": _integer_rule(nullable=True),
+                "view_count": _integer_rule(nullable=True),
+                "comment_count": _integer_rule(nullable=True),
+            }
+        ),
     }
 )
 
@@ -365,6 +385,15 @@ _EXPECTED_SUCCESS_CONTRACT: Final[Mapping[tuple[str, str], _ExpectedSuccessContr
                 50,
                 False,
                 _MAX_BILIBILI_OUTPUT_BYTES,
+            ),
+            ("youtube", "read.video"): (
+                "yt-dlp",
+                "2026.7.4",
+                "youtube.video.v1",
+                1,
+                1,
+                False,
+                _MAX_YOUTUBE_OUTPUT_BYTES,
             ),
         }
     )
@@ -443,6 +472,7 @@ class ExecutionSuccessV1:
             not minimum <= len(items) <= maximum
             or any(item.schema_id != schema_id for item in items)
             or (self.source == "bilibili" and any(not _valid_bilibili_item(item) for item in items))
+            or (self.source == "youtube" and any(not _valid_youtube_item(item) for item in items))
             or _result_payload_size(items) > maximum_output_bytes
         ):
             raise ValueError("invalid execution success")
@@ -564,6 +594,50 @@ def _valid_bilibili_item(item: ExecutionItemV1) -> bool:
         and _BVID.fullmatch(native_id)
         and item.fields.get("url") == f"https://www.bilibili.com/video/{native_id}"
     )
+
+
+def _valid_youtube_video_url(value: object) -> bool:
+    return bool(
+        type(value) is str
+        and value.isascii()
+        and len(value) <= 128
+        and _YOUTUBE_VIDEO_URL.fullmatch(value)
+    )
+
+
+def _valid_youtube_item(item: ExecutionItemV1) -> bool:
+    native_id = item.fields.get("native_id")
+    title = item.fields.get("title")
+    author = item.fields.get("author")
+    published_at = item.fields.get("published_at")
+    if (
+        type(native_id) is not str
+        or _YOUTUBE_VIDEO_ID.fullmatch(native_id) is None
+        or item.fields.get("url") != f"https://www.youtube.com/watch?v={native_id}"
+        or type(title) is not str
+        or not _utf8_within(title, _MAX_YOUTUBE_TITLE_BYTES)
+        or (
+            author is not None
+            and (type(author) is not str or not _utf8_within(author, _MAX_YOUTUBE_AUTHOR_BYTES))
+        )
+    ):
+        return False
+    if published_at is None:
+        return True
+    if type(published_at) is not str or len(published_at) != 10 or not published_at.isascii():
+        return False
+    try:
+        parsed = date.fromisoformat(published_at)
+    except ValueError:
+        return False
+    return parsed.year >= 1970 and parsed.isoformat() == published_at
+
+
+def _utf8_within(value: str, maximum_bytes: int) -> bool:
+    try:
+        return len(value.encode("utf-8", errors="strict")) <= maximum_bytes
+    except UnicodeError:
+        return False
 
 
 def _valid_public_location(value: object) -> bool:
