@@ -195,14 +195,13 @@ Agent Reach はシンプルなことを1つだけ行います：**ツールの�
 
 ### ホスト統合向け構造化実行 API
 
-`agent_reach.execution.v1` は、RSS 2件、Bilibili 4件、YouTube
-`read.video` 1件の合計7件の閉じた操作を提供します。YouTube 操作は正規の
-watch URL とデータを持たないネットワーク承認だけを受け取り、
-`yt-dlp==2026.7.4`、`yt-dlp-ejs==0.8.0`、Python の隣にある
-`deno==2.8.3` を固定して呼び出します。コマンド、argv、endpoint、proxy、
-Cookie、資格情報、browser、出力先、plugin、remote component、fallback は
-選択できず、動画もダウンロードしません。認可、非公開のプロセス状態、強制
-キャンセル、有界 framing、独立した結果検証、監査は統合ホストが担当します。
+`agent_reach.execution.v1` は、RSS 2件、Bilibili 4件、YouTube 3件、
+V2EX 4件、Exa Web 検索1件の合計14件の閉じた操作を提供します。各操作は
+固定された backend contract と型付き host capability だけを受け取ります。
+コマンド、argv、endpoint、MCP method、proxy、Cookie、資格情報、browser、
+出力先、plugin、remote component、fallback は選択できません。認可、
+非公開のプロセス状態、強制キャンセル、有界 framing、独立した結果検証、
+監査は統合ホストが担当します。
 詳細は [execution v1 guide](execution-v1.md) を参照してください。
 
 ### 🔌 すべてのチャンネルはプラグ可能

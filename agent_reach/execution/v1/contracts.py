@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timezone
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 from urllib.parse import urlsplit
@@ -15,6 +17,8 @@ from urllib.parse import urlsplit
 PROTOCOL_VERSION: Final = "v1"
 FETCHED_DOCUMENT_CAPABILITY: Final = "fetched_document.v1"
 NETWORK_ACCESS_CAPABILITY: Final = "network_access.v1"
+PRIVATE_WORKSPACE_CAPABILITY: Final = "private_workspace.v1"
+MCPORTER_ARTIFACTS_CAPABILITY: Final = "mcporter_artifacts.v1"
 
 MAX_DOCUMENT_BYTES: Final = 1_048_576
 MAX_METADATA_BYTES: Final = 16_384
@@ -36,6 +40,10 @@ _MAX_YOUTUBE_OUTPUT_BYTES: Final = 512 * 1_024
 _MAX_YOUTUBE_TITLE_BYTES: Final = 1_024
 _MAX_YOUTUBE_AUTHOR_BYTES: Final = 1_024
 _MAX_YOUTUBE_AUTHOR_CHARACTERS: Final = 1_024
+_MAX_YOUTUBE_LANGUAGE_CHARACTERS: Final = 32
+_MAX_V2EX_IDENTIFIER_CHARACTERS: Final = 64
+_MAX_EXA_OUTPUT_BYTES: Final = 512 * 1_024
+_MAX_ARTIFACT_PATH_CHARACTERS: Final = 8_192
 
 _MAX_ARGUMENTS: Final = 8
 _MAX_ARGUMENT_STRING_CHARACTERS: Final = _MAX_BILIBILI_QUERY_CHARACTERS
@@ -48,6 +56,10 @@ _ARGUMENT_NAME: Final = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 _BVID: Final = re.compile(r"BV[A-Za-z0-9]{10}")
 _YOUTUBE_VIDEO_ID: Final = re.compile(r"[A-Za-z0-9_-]{11}")
 _YOUTUBE_VIDEO_URL: Final = re.compile(r"https://www[.]youtube[.]com/watch[?]v=([A-Za-z0-9_-]{11})")
+_YOUTUBE_LANGUAGE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")
+_POSITIVE_DECIMAL: Final = re.compile(r"[1-9][0-9]{0,31}")
+_V2EX_IDENTIFIER: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+_SHA256: Final = re.compile(r"[0-9a-f]{64}")
 
 ExecutionErrorCodeV1 = Literal[
     "unsupported_protocol_version",
@@ -140,6 +152,7 @@ class OperationCapabilityV1:
             or not _valid_version(self.backend_version)
             or not self.required_host_capabilities
             or any(not _valid_identifier(value) for value in self.required_host_capabilities)
+            or len(set(self.required_host_capabilities)) != len(self.required_host_capabilities)
         ):
             raise ValueError("invalid execution capability")
         numeric_limits = (
@@ -224,6 +237,44 @@ class NetworkAccessV1:
 
 
 @dataclass(frozen=True, slots=True)
+class PrivateWorkspaceV1:
+    """Data-free approval to use only the host process's private cwd."""
+
+
+@dataclass(frozen=True, slots=True)
+class McporterArtifactsV1:
+    """Closed identities for one operator-attested mcporter installation."""
+
+    node_executable: str
+    node_sha256: str
+    mcporter_root: str
+    mcporter_cli: str
+    mcporter_tree_sha256: str
+    config_path: str
+    config_sha256: str
+
+    def __post_init__(self) -> None:
+        paths = (
+            self.node_executable,
+            self.mcporter_root,
+            self.mcporter_cli,
+            self.config_path,
+        )
+        digests = (
+            self.node_sha256,
+            self.mcporter_tree_sha256,
+            self.config_sha256,
+        )
+        if (
+            any(not _valid_closed_absolute_path(value) for value in paths)
+            or any(type(value) is not str or _SHA256.fullmatch(value) is None for value in digests)
+            or not Path(self.mcporter_cli).is_relative_to(Path(self.mcporter_root))
+            or self.mcporter_cli == self.mcporter_root
+        ):
+            raise ValueError("invalid mcporter artifacts")
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionLimitsV1:
     """Host-selected limits that may only narrow descriptor hard limits."""
 
@@ -240,7 +291,9 @@ class ExecutionLimitsV1:
             raise ValueError("invalid execution limits")
 
 
-HostCapabilityV1: TypeAlias = FetchedDocumentV1 | NetworkAccessV1
+HostCapabilityV1: TypeAlias = (
+    FetchedDocumentV1 | NetworkAccessV1 | PrivateWorkspaceV1 | McporterArtifactsV1
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -261,7 +314,13 @@ class ExecutionContextV1:
             or not callable(self.checkpoint)
             or type(self.limits) is not ExecutionLimitsV1
             or any(
-                type(capability) not in {FetchedDocumentV1, NetworkAccessV1}
+                type(capability)
+                not in {
+                    FetchedDocumentV1,
+                    NetworkAccessV1,
+                    PrivateWorkspaceV1,
+                    McporterArtifactsV1,
+                }
                 for capability in capabilities
             )
             or len({type(capability) for capability in capabilities}) != len(capabilities)
@@ -325,75 +384,204 @@ _RESULT_SCHEMA_FIELDS: Final[Mapping[str, Mapping[str, _ResultFieldRule]]] = Map
                 "comment_count": _integer_rule(nullable=True),
             }
         ),
+        "youtube.subtitle.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=False),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "language": _text_rule(_MAX_YOUTUBE_LANGUAGE_CHARACTERS, nullable=False),
+                "origin": _text_rule(16, nullable=False),
+            }
+        ),
+        "v2ex.topic.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=True),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "author": _text_rule(MAX_AUTHOR_CHARACTERS, nullable=True),
+                "published_at": _text_rule(MAX_PUBLISHED_CHARACTERS, nullable=True),
+                "node": _text_rule(_MAX_V2EX_IDENTIFIER_CHARACTERS, nullable=False),
+            }
+        ),
+        "v2ex.reply.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=False),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "author": _text_rule(MAX_AUTHOR_CHARACTERS, nullable=False),
+                "published_at": _text_rule(MAX_PUBLISHED_CHARACTERS, nullable=True),
+            }
+        ),
+        "v2ex.profile.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=True),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "title": _text_rule(_MAX_V2EX_IDENTIFIER_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "published_at": _text_rule(MAX_PUBLISHED_CHARACTERS, nullable=True),
+            }
+        ),
+        "exa.search.result.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=False),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "author": _text_rule(MAX_AUTHOR_CHARACTERS, nullable=True),
+                "published_at": _text_rule(MAX_PUBLISHED_CHARACTERS, nullable=True),
+            }
+        ),
     }
 )
 
-_ExpectedSuccessContract: TypeAlias = tuple[str, str, str, int, int, bool, int]
+_ExpectedSuccessContract: TypeAlias = tuple[
+    str,
+    str,
+    tuple[str, ...],
+    int,
+    int,
+    frozenset[str],
+    int,
+]
 _EXPECTED_SUCCESS_CONTRACT: Final[Mapping[tuple[str, str], _ExpectedSuccessContract]] = (
     MappingProxyType(
         {
             ("rss", "read.feed"): (
                 "feedparser",
                 "6.0.12",
-                "rss.feed.v1",
+                ("rss.feed.v1",),
                 1,
                 1,
-                True,
+                frozenset({"permanent"}),
                 MAX_OUTPUT_BYTES,
             ),
             ("rss", "browse.entries"): (
                 "feedparser",
                 "6.0.12",
-                "rss.entry.v1",
+                ("rss.entry.v1",),
                 0,
                 21,
-                True,
+                frozenset({"permanent"}),
                 MAX_OUTPUT_BYTES,
             ),
             ("bilibili", "search.videos"): (
                 "bili-cli",
                 "0.6.2",
-                "bilibili.video.v1",
+                ("bilibili.video.v1",),
                 0,
                 50,
-                False,
+                frozenset(),
                 _MAX_BILIBILI_OUTPUT_BYTES,
             ),
             ("bilibili", "read.video"): (
                 "bili-cli",
                 "0.6.2",
-                "bilibili.video.v1",
+                ("bilibili.video.v1",),
                 1,
                 1,
-                False,
+                frozenset(),
                 _MAX_BILIBILI_OUTPUT_BYTES,
             ),
             ("bilibili", "browse.hot"): (
                 "bili-cli",
                 "0.6.2",
-                "bilibili.video.v1",
+                ("bilibili.video.v1",),
                 0,
                 50,
-                False,
+                frozenset(),
                 _MAX_BILIBILI_OUTPUT_BYTES,
             ),
             ("bilibili", "browse.rank"): (
                 "bili-cli",
                 "0.6.2",
-                "bilibili.video.v1",
+                ("bilibili.video.v1",),
                 0,
                 50,
-                False,
+                frozenset(),
                 _MAX_BILIBILI_OUTPUT_BYTES,
             ),
             ("youtube", "read.video"): (
                 "yt-dlp",
                 "2026.7.4",
-                "youtube.video.v1",
+                ("youtube.video.v1",),
                 1,
                 1,
-                False,
+                frozenset(),
                 _MAX_YOUTUBE_OUTPUT_BYTES,
+            ),
+            ("youtube", "search.videos"): (
+                "yt-dlp",
+                "2026.7.4",
+                ("youtube.video.v1",),
+                0,
+                50,
+                frozenset(),
+                _MAX_YOUTUBE_OUTPUT_BYTES,
+            ),
+            ("youtube", "read.subtitles"): (
+                "yt-dlp",
+                "2026.7.4",
+                ("youtube.subtitle.v1",),
+                1,
+                1,
+                frozenset(),
+                _MAX_YOUTUBE_OUTPUT_BYTES,
+            ),
+            ("v2ex", "browse.hot"): (
+                "v2ex-public-api",
+                "legacy-json-2026-07-31",
+                ("v2ex.topic.v1",),
+                0,
+                50,
+                frozenset(),
+                MAX_OUTPUT_BYTES,
+            ),
+            ("v2ex", "browse.node_topics"): (
+                "v2ex-public-api",
+                "legacy-json-2026-07-31",
+                ("v2ex.topic.v1",),
+                0,
+                50,
+                frozenset(),
+                MAX_OUTPUT_BYTES,
+            ),
+            ("v2ex", "read.topic"): (
+                "v2ex-public-api",
+                "legacy-json-2026-07-31",
+                ("v2ex.topic.v1", "v2ex.reply.v1"),
+                1,
+                21,
+                frozenset(
+                    {
+                        "not_found",
+                        "authentication",
+                        "authorization",
+                        "rate_limit",
+                        "transient",
+                        "permanent",
+                        "backend_contract_violation",
+                    }
+                ),
+                MAX_OUTPUT_BYTES,
+            ),
+            ("v2ex", "read.user"): (
+                "v2ex-public-api",
+                "legacy-json-2026-07-31",
+                ("v2ex.profile.v1",),
+                1,
+                1,
+                frozenset(),
+                MAX_OUTPUT_BYTES,
+            ),
+            ("exa", "search.web"): (
+                "exa-mcporter",
+                "0.12.3+exa-web.v1",
+                ("exa.search.result.v1",),
+                0,
+                20,
+                frozenset(),
+                _MAX_EXA_OUTPUT_BYTES,
             ),
         }
     )
@@ -450,10 +638,10 @@ class ExecutionSuccessV1:
         (
             backend_id,
             backend_version,
-            schema_id,
+            schema_ids,
             minimum,
             maximum,
-            allows_partial,
+            partial_error_codes,
             maximum_output_bytes,
         ) = expected_contract
         if (
@@ -463,16 +651,27 @@ class ExecutionSuccessV1:
             or type(self.truncated) is not bool
             or (
                 self.partial_error_code is not None
-                and (not allows_partial or self.partial_error_code != "permanent")
+                and self.partial_error_code not in partial_error_codes
             )
             or any(type(item) is not ExecutionItemV1 for item in items)
         ):
             raise ValueError("invalid execution success")
         if (
             not minimum <= len(items) <= maximum
-            or any(item.schema_id != schema_id for item in items)
+            or not _valid_result_schema_sequence(
+                (self.source, self.operation),
+                items,
+                schema_ids,
+            )
+            or (
+                self.partial_error_code is not None
+                and (self.source, self.operation) == ("v2ex", "read.topic")
+                and len(items) != 1
+            )
             or (self.source == "bilibili" and any(not _valid_bilibili_item(item) for item in items))
             or (self.source == "youtube" and any(not _valid_youtube_item(item) for item in items))
+            or (self.source == "v2ex" and any(not _valid_v2ex_item(item) for item in items))
+            or (self.source == "exa" and any(not _valid_exa_item(item) for item in items))
             or _result_payload_size(items) > maximum_output_bytes
         ):
             raise ValueError("invalid execution success")
@@ -530,6 +729,20 @@ def _valid_version(value: object) -> bool:
         and 0 < len(value) <= 64
         and value.isascii()
         and not _contains_control(value)
+    )
+
+
+def _valid_closed_absolute_path(value: object) -> bool:
+    if (
+        type(value) is not str
+        or not 0 < len(value) <= _MAX_ARTIFACT_PATH_CHARACTERS
+        or _contains_control(value)
+        or _contains_invalid_scalar(value)
+    ):
+        return False
+    path = Path(value)
+    return bool(
+        path.is_absolute() and path.name and str(path) == value and os.path.normpath(value) == value
     )
 
 
@@ -606,6 +819,10 @@ def _valid_youtube_video_url(value: object) -> bool:
 
 
 def _valid_youtube_item(item: ExecutionItemV1) -> bool:
+    if item.schema_id == "youtube.subtitle.v1":
+        return _valid_youtube_subtitle_item(item)
+    if item.schema_id != "youtube.video.v1":
+        return False
     native_id = item.fields.get("native_id")
     title = item.fields.get("title")
     author = item.fields.get("author")
@@ -631,6 +848,160 @@ def _valid_youtube_item(item: ExecutionItemV1) -> bool:
     except ValueError:
         return False
     return parsed.year >= 1970 and parsed.isoformat() == published_at
+
+
+def _valid_youtube_subtitle_item(item: ExecutionItemV1) -> bool:
+    native_id = item.fields.get("native_id")
+    title = item.fields.get("title")
+    language = item.fields.get("language")
+    text = item.fields.get("text")
+    return bool(
+        type(native_id) is str
+        and _YOUTUBE_VIDEO_ID.fullmatch(native_id)
+        and item.fields.get("url") == f"https://www.youtube.com/watch?v={native_id}"
+        and type(title) is str
+        and _utf8_within(title, _MAX_YOUTUBE_TITLE_BYTES)
+        and type(language) is str
+        and _YOUTUBE_LANGUAGE.fullmatch(language)
+        and item.fields.get("origin") in {"manual", "automatic"}
+        and type(text) is str
+        and text.lstrip("\ufeff\r\n ").startswith("WEBVTT")
+    )
+
+
+def _valid_result_schema_sequence(
+    key: tuple[str, str],
+    items: tuple[ExecutionItemV1, ...],
+    schema_ids: tuple[str, ...],
+) -> bool:
+    if key == ("v2ex", "read.topic"):
+        if not items or items[0].schema_id != "v2ex.topic.v1":
+            return False
+        topic_id = items[0].fields.get("native_id")
+        replies = items[1:]
+        reply_ids = tuple(reply.fields.get("native_id") for reply in replies)
+        return bool(
+            schema_ids == ("v2ex.topic.v1", "v2ex.reply.v1")
+            and type(topic_id) is str
+            and all(reply.schema_id == schema_ids[1] for reply in replies)
+            and len(set(reply_ids)) == len(reply_ids)
+            and all(
+                reply.fields.get("url")
+                == f"https://www.v2ex.com/t/{topic_id}#reply{reply.fields.get('native_id')}"
+                for reply in replies
+            )
+        )
+    return len(schema_ids) == 1 and all(item.schema_id == schema_ids[0] for item in items)
+
+
+def _valid_v2ex_item(item: ExecutionItemV1) -> bool:
+    native_id = item.fields.get("native_id")
+    published_at = item.fields.get("published_at")
+    if (
+        type(native_id) is not str
+        or _POSITIVE_DECIMAL.fullmatch(native_id) is None
+        or int(native_id) > _MAX_RESULT_INTEGER
+        or not _valid_v2ex_timestamp(published_at)
+    ):
+        return False
+    if item.schema_id == "v2ex.topic.v1":
+        node = item.fields.get("node")
+        author = item.fields.get("author")
+        return bool(
+            item.fields.get("url") == f"https://www.v2ex.com/t/{native_id}"
+            and type(node) is str
+            and _V2EX_IDENTIFIER.fullmatch(node)
+            and (author is None or (type(author) is str and _V2EX_IDENTIFIER.fullmatch(author)))
+        )
+    if item.schema_id == "v2ex.reply.v1":
+        url = item.fields.get("url")
+        author = item.fields.get("author")
+        return bool(
+            type(url) is str
+            and re.fullmatch(
+                rf"https://www[.]v2ex[.]com/t/[1-9][0-9]{{0,31}}#reply{re.escape(native_id)}",
+                url,
+            )
+            and type(author) is str
+            and _V2EX_IDENTIFIER.fullmatch(author)
+        )
+    if item.schema_id == "v2ex.profile.v1":
+        username = item.fields.get("title")
+        return bool(
+            type(username) is str
+            and _V2EX_IDENTIFIER.fullmatch(username)
+            and item.fields.get("url") == f"https://www.v2ex.com/member/{username}"
+        )
+    return False
+
+
+def _valid_v2ex_timestamp(value: object) -> bool:
+    if value is None:
+        return True
+    if type(value) is not str or not value.isascii():
+        return False
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return bool(
+        parsed.tzinfo is not None
+        and parsed.utcoffset() == timezone.utc.utcoffset(parsed)
+        and parsed.year >= 1970
+        and parsed.isoformat() == value
+    )
+
+
+def _valid_exa_item(item: ExecutionItemV1) -> bool:
+    if item.schema_id != "exa.search.result.v1":
+        return False
+    return _valid_public_result_url(item.fields.get("url"))
+
+
+def _valid_public_result_url(value: object) -> bool:
+    if (
+        type(value) is not str
+        or not value.isascii()
+        or not 0 < len(value) <= MAX_URL_CHARACTERS
+        or value != value.strip()
+        or _contains_control(value)
+        or any(character.isspace() for character in value)
+        or "\\" in value
+    ):
+        return False
+    try:
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or parsed.username is not None
+            or parsed.password is not None
+            or hostname is None
+        ):
+            return False
+        expected_port = 443 if parsed.scheme.lower() == "https" else 80
+        if (parsed.port or expected_port) != expected_port:
+            return False
+        host = hostname.rstrip(".").lower()
+        if not host or host == "localhost" or host.endswith((".localhost", ".local")):
+            return False
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            labels = host.split(".")
+            return bool(
+                len(labels) >= 2
+                and all(
+                    0 < len(label) <= 63
+                    and label[0].isalnum()
+                    and label[-1].isalnum()
+                    and all(character.isalnum() or character == "-" for character in label)
+                    for label in labels
+                )
+            )
+        return _is_global_address(address)
+    except (UnicodeError, ValueError):
+        return False
 
 
 def _utf8_within(value: str, maximum_bytes: int) -> bool:

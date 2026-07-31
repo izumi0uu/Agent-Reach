@@ -195,14 +195,13 @@ Agent Reach는 한 가지 간단한 작업을 수행합니다: **도구 선택 �
 
 ### 호스트 통합용 구조화 실행 API
 
-`agent_reach.execution.v1`은 RSS 2개, Bilibili 4개, YouTube
-`read.video` 1개로 총 7개의 폐쇄형 작업을 제공합니다. YouTube 작업은 표준
-watch URL과 데이터가 없는 네트워크 승인만 받고 `yt-dlp==2026.7.4`,
-`yt-dlp-ejs==0.8.0`, Python 옆의 `deno==2.8.3`만 고정 호출합니다.
-명령, argv, endpoint, proxy, Cookie, 자격 증명, browser, 출력 경로, plugin,
-remote component 또는 fallback을 선택할 수 없고 동영상을 다운로드하지도
-않습니다. 권한 부여, 비공개 프로세스 상태, 강제 취소, 제한된 framing, 독립
-결과 검증 및 감사는 통합 호스트가 담당합니다. 자세한 내용은
+`agent_reach.execution.v1`은 RSS 2개, Bilibili 4개, YouTube 3개,
+V2EX 4개, Exa Web 검색 1개로 총 14개의 폐쇄형 작업을 제공합니다. 각 작업은
+고정된 backend contract와 형식화된 host capability만 받습니다. 명령, argv,
+endpoint, MCP method, proxy, Cookie, 자격 증명, browser, 출력 경로, plugin,
+remote component 또는 fallback을 선택할 수 없습니다. 권한 부여, 비공개
+프로세스 상태, 강제 취소, 제한된 framing, 독립 결과 검증 및 감사는 통합
+호스트가 담당합니다. 자세한 내용은
 [execution v1 guide](execution-v1.md)를 참조하세요.
 
 ### 🔌 모든 채널은 플러그인 가능
