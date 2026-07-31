@@ -17,7 +17,9 @@ import pytest
 from agent_reach.execution.v1 import (
     EXECUTION_ERROR_CODES,
     FETCHED_DOCUMENT_CAPABILITY,
+    MCPORTER_ARTIFACTS_CAPABILITY,
     NETWORK_ACCESS_CAPABILITY,
+    PRIVATE_WORKSPACE_CAPABILITY,
     PROTOCOL_VERSION,
     ExecutionContextV1,
     ExecutionFailureV1,
@@ -26,7 +28,9 @@ from agent_reach.execution.v1 import (
     ExecutionRequestV1,
     ExecutionSuccessV1,
     FetchedDocumentV1,
+    McporterArtifactsV1,
     NetworkAccessV1,
+    PrivateWorkspaceV1,
     execute,
     list_capabilities,
 )
@@ -89,6 +93,110 @@ def _youtube_item(
             "view_count": view_count,
             "comment_count": comment_count,
         },  # type: ignore[arg-type]
+    )
+
+
+def _subtitle_item(
+    *,
+    native_id: str = "dQw4w9WgXcQ",
+    text: object = "WEBVTT\n",
+    language: object = "en",
+    origin: object = "manual",
+) -> ExecutionItemV1:
+    return ExecutionItemV1(
+        "youtube.subtitle.v1",
+        {
+            "text": text,
+            "native_id": native_id,
+            "title": "title",
+            "url": f"https://www.youtube.com/watch?v={native_id}",
+            "language": language,
+            "origin": origin,
+        },  # type: ignore[arg-type]
+    )
+
+
+def _v2ex_topic_item(
+    *,
+    native_id: str = "42",
+    url: str | None = None,
+    author: object = "alice",
+    published_at: object = "2026-07-31T00:00:00+00:00",
+) -> ExecutionItemV1:
+    return ExecutionItemV1(
+        "v2ex.topic.v1",
+        {
+            "text": "topic body",
+            "native_id": native_id,
+            "title": "Topic title",
+            "url": url or f"https://www.v2ex.com/t/{native_id}",
+            "author": author,
+            "published_at": published_at,
+            "node": "python",
+        },  # type: ignore[arg-type]
+    )
+
+
+def _v2ex_reply_item(
+    *,
+    topic_id: str = "42",
+    native_id: str = "7",
+    author: object = "bob",
+    published_at: object = None,
+) -> ExecutionItemV1:
+    return ExecutionItemV1(
+        "v2ex.reply.v1",
+        {
+            "text": "reply body",
+            "native_id": native_id,
+            "url": f"https://www.v2ex.com/t/{topic_id}#reply{native_id}",
+            "author": author,
+            "published_at": published_at,
+        },  # type: ignore[arg-type]
+    )
+
+
+def _v2ex_profile_item(
+    *,
+    member_id: str = "9",
+    username: str = "alice",
+    text: object = "about",
+    published_at: object = None,
+) -> ExecutionItemV1:
+    return ExecutionItemV1(
+        "v2ex.profile.v1",
+        {
+            "text": text,
+            "native_id": member_id,
+            "title": username,
+            "url": f"https://www.v2ex.com/member/{username}",
+            "published_at": published_at,
+        },  # type: ignore[arg-type]
+    )
+
+
+def _exa_item(*, url: str = "https://example.com/result") -> ExecutionItemV1:
+    return ExecutionItemV1(
+        "exa.search.result.v1",
+        {
+            "text": "result body",
+            "title": "result title",
+            "url": url,
+            "author": None,
+            "published_at": None,
+        },
+    )
+
+
+def _mcporter_artifacts(root: Path) -> McporterArtifactsV1:
+    return McporterArtifactsV1(
+        node_executable=str(root / "node"),
+        node_sha256="a" * 64,
+        mcporter_root=str(root / "mcporter"),
+        mcporter_cli=str(root / "mcporter" / "dist" / "cli.js"),
+        mcporter_tree_sha256="b" * 64,
+        config_path=str(root / "config.json"),
+        config_sha256="c" * 64,
     )
 
 
@@ -181,9 +289,87 @@ def test_capability_discovery_is_static_closed_and_io_free(
             "2026.7.4",
             (NETWORK_ACCESS_CAPABILITY,),
         ),
+        (
+            "youtube",
+            "search.videos",
+            "youtube.search.videos.arguments.v1",
+            ("youtube.video.v1",),
+            "yt-dlp",
+            "2026.7.4",
+            (NETWORK_ACCESS_CAPABILITY,),
+        ),
+        (
+            "youtube",
+            "read.subtitles",
+            "youtube.read.subtitles.arguments.v1",
+            ("youtube.subtitle.v1",),
+            "yt-dlp",
+            "2026.7.4",
+            (NETWORK_ACCESS_CAPABILITY, PRIVATE_WORKSPACE_CAPABILITY),
+        ),
+        (
+            "v2ex",
+            "browse.hot",
+            "v2ex.browse.hot.arguments.v1",
+            ("v2ex.topic.v1",),
+            "v2ex-public-api",
+            "legacy-json-2026-07-31",
+            (NETWORK_ACCESS_CAPABILITY,),
+        ),
+        (
+            "v2ex",
+            "browse.node_topics",
+            "v2ex.browse.node_topics.arguments.v1",
+            ("v2ex.topic.v1",),
+            "v2ex-public-api",
+            "legacy-json-2026-07-31",
+            (NETWORK_ACCESS_CAPABILITY,),
+        ),
+        (
+            "v2ex",
+            "read.topic",
+            "v2ex.read.topic.arguments.v1",
+            ("v2ex.topic.v1", "v2ex.reply.v1"),
+            "v2ex-public-api",
+            "legacy-json-2026-07-31",
+            (NETWORK_ACCESS_CAPABILITY,),
+        ),
+        (
+            "v2ex",
+            "read.user",
+            "v2ex.read.user.arguments.v1",
+            ("v2ex.profile.v1",),
+            "v2ex-public-api",
+            "legacy-json-2026-07-31",
+            (NETWORK_ACCESS_CAPABILITY,),
+        ),
+        (
+            "exa",
+            "search.web",
+            "exa.search.web.arguments.v1",
+            ("exa.search.result.v1",),
+            "exa-mcporter",
+            "0.12.3+exa-web.v1",
+            (NETWORK_ACCESS_CAPABILITY, MCPORTER_ARTIFACTS_CAPABILITY),
+        ),
     ]
     assert all(item.protocol_version == PROTOCOL_VERSION for item in capabilities)
-    assert [item.maximum_items for item in capabilities] == [1, 21, 50, 1, 50, 50, 1]
+    assert [item.maximum_items for item in capabilities] == [
+        1,
+        21,
+        50,
+        1,
+        50,
+        50,
+        1,
+        50,
+        1,
+        50,
+        50,
+        21,
+        1,
+        20,
+    ]
     assert all(item.maximum_document_bytes == 1_048_576 for item in capabilities)
     assert all(item.maximum_metadata_bytes == 16_384 for item in capabilities)
     assert [item.maximum_output_bytes for item in capabilities] == [
@@ -193,6 +379,13 @@ def test_capability_discovery_is_static_closed_and_io_free(
         524_288,
         524_288,
         524_288,
+        524_288,
+        524_288,
+        524_288,
+        1_048_576,
+        1_048_576,
+        1_048_576,
+        1_048_576,
         524_288,
     ]
     assert all(item.maximum_content_type_characters == 512 for item in capabilities)
@@ -209,6 +402,13 @@ def test_capability_discovery_is_static_closed_and_io_free(
         1_024,
         1_024,
         1_024,
+        1_024,
+        1_024,
+        2_048,
+        2_048,
+        2_048,
+        2_048,
+        2_048,
     ]
     assert all(item.maximum_published_characters == 512 for item in capabilities)
     with pytest.raises(FrozenInstanceError):
@@ -225,7 +425,7 @@ def denied_home(cls):
     raise AssertionError('ambient home access')
 pathlib.Path.home = classmethod(denied_home)
 from agent_reach.execution.v1 import list_capabilities
-assert len(list_capabilities()) == 7
+assert len(list_capabilities()) == 14
 assert 'feedparser' not in sys.modules
 assert not any(name == 'bili_cli' or name.startswith('bili_cli.') for name in sys.modules)
 assert not any(name == 'yt_dlp' or name.startswith('yt_dlp.') for name in sys.modules)
@@ -234,6 +434,10 @@ assert 'deno' not in sys.modules
 assert 'agent_reach.execution.v1.rss' not in sys.modules
 assert 'agent_reach.execution.v1.bilibili' not in sys.modules
 assert 'agent_reach.execution.v1.youtube' not in sys.modules
+assert 'agent_reach.execution.v1.v2ex' not in sys.modules
+assert 'agent_reach.execution.v1._v2ex_transport' not in sys.modules
+assert 'agent_reach.execution.v1.exa' not in sys.modules
+assert 'httpcore' not in sys.modules
 assert 'agent_reach.config' not in sys.modules
 """
 
@@ -320,6 +524,56 @@ def test_network_access_marker_is_data_free_immutable_and_context_is_closed() ->
         ExecutionContextV1((marker, NetworkAccessV1()))
     with pytest.raises(ValueError):
         ExecutionContextV1((object(),))  # type: ignore[arg-type]
+
+
+def test_private_workspace_and_mcporter_capabilities_are_closed_and_immutable(
+    tmp_path: Path,
+) -> None:
+    workspace = PrivateWorkspaceV1()
+    artifacts = _mcporter_artifacts(tmp_path)
+
+    assert fields(workspace) == ()
+    assert not hasattr(workspace, "__dict__")
+    with pytest.raises(TypeError):
+        PrivateWorkspaceV1(path=str(tmp_path))  # type: ignore[call-arg]
+    with pytest.raises((FrozenInstanceError, TypeError)):
+        workspace.path = str(tmp_path)  # type: ignore[attr-defined]
+    assert tuple(field.name for field in fields(artifacts)) == (
+        "node_executable",
+        "node_sha256",
+        "mcporter_root",
+        "mcporter_cli",
+        "mcporter_tree_sha256",
+        "config_path",
+        "config_sha256",
+    )
+    assert not hasattr(artifacts, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        artifacts.node_sha256 = "d" * 64  # type: ignore[misc]
+
+    supplied = [NetworkAccessV1(), artifacts]
+    context = ExecutionContextV1(supplied)  # type: ignore[arg-type]
+    supplied.clear()
+    assert context.host_capabilities == (NetworkAccessV1(), artifacts)
+
+
+def test_mcporter_artifacts_reject_noncanonical_paths_and_digest_drift(tmp_path: Path) -> None:
+    valid = _mcporter_artifacts(tmp_path)
+    values: dict[str, object] = {field.name: getattr(valid, field.name) for field in fields(valid)}
+    invalid = (
+        ("node_executable", "node"),
+        ("node_executable", f"{tmp_path}/nested/../node"),
+        ("config_path", f"{tmp_path}/config.json/"),
+        ("mcporter_cli", str(tmp_path / "outside" / "cli.js")),
+        ("mcporter_cli", str(tmp_path / "mcporter")),
+        ("node_sha256", "A" * 64),
+        ("mcporter_tree_sha256", "b" * 63),
+        ("config_sha256", "g" * 64),
+    )
+    for field_name, value in invalid:
+        candidate = {**values, field_name: value}
+        with pytest.raises(ValueError):
+            McporterArtifactsV1(**candidate)  # type: ignore[arg-type]
 
 
 def test_bilibili_result_schema_accepts_bounded_integers_but_not_booleans() -> None:
@@ -437,6 +691,205 @@ def test_youtube_result_schema_is_closed_nullable_and_identity_correlated() -> N
             )
     with pytest.raises(ValueError):
         _youtube_item(text="value\x00hidden")
+
+
+def test_youtube_subtitle_schema_is_closed_and_correlated() -> None:
+    item = _subtitle_item()
+    success = ExecutionSuccessV1(
+        PROTOCOL_VERSION,
+        "youtube",
+        "read.subtitles",
+        "yt-dlp",
+        "2026.7.4",
+        (item,),
+    )
+
+    assert success.items == (item,)
+    for invalid in (
+        _subtitle_item(text="plain text"),
+        _subtitle_item(native_id="invalid"),
+        _subtitle_item(language="bad language"),
+        _subtitle_item(origin="provider"),
+    ):
+        with pytest.raises(ValueError):
+            ExecutionSuccessV1(
+                PROTOCOL_VERSION,
+                "youtube",
+                "read.subtitles",
+                "yt-dlp",
+                "2026.7.4",
+                (invalid,),
+            )
+    with pytest.raises(ValueError):
+        ExecutionSuccessV1(
+            PROTOCOL_VERSION,
+            "youtube",
+            "read.subtitles",
+            "yt-dlp",
+            "2026.7.4",
+            (item,),
+            partial_error_code="permanent",
+        )
+
+
+def test_v2ex_result_schemas_freeze_order_identity_timestamps_and_partial_state() -> None:
+    topic = _v2ex_topic_item()
+    replies = (_v2ex_reply_item(native_id="7"), _v2ex_reply_item(native_id="8"))
+    complete = ExecutionSuccessV1(
+        PROTOCOL_VERSION,
+        "v2ex",
+        "read.topic",
+        "v2ex-public-api",
+        "legacy-json-2026-07-31",
+        (topic, *replies),
+    )
+    profile = ExecutionSuccessV1(
+        PROTOCOL_VERSION,
+        "v2ex",
+        "read.user",
+        "v2ex-public-api",
+        "legacy-json-2026-07-31",
+        (_v2ex_profile_item(),),
+    )
+
+    assert complete.items == (topic, *replies)
+    assert profile.items[0].fields["title"] == "alice"
+    for code in (
+        "not_found",
+        "authentication",
+        "authorization",
+        "rate_limit",
+        "transient",
+        "permanent",
+        "backend_contract_violation",
+    ):
+        partial = ExecutionSuccessV1(
+            PROTOCOL_VERSION,
+            "v2ex",
+            "read.topic",
+            "v2ex-public-api",
+            "legacy-json-2026-07-31",
+            (topic,),
+            partial_error_code=code,  # type: ignore[arg-type]
+        )
+        assert partial.partial_error_code == code
+
+    invalid_sequences = (
+        (replies[0], topic),
+        (topic, _v2ex_reply_item(topic_id="43")),
+        (topic, replies[0], replies[0]),
+    )
+    for items in invalid_sequences:
+        with pytest.raises(ValueError):
+            ExecutionSuccessV1(
+                PROTOCOL_VERSION,
+                "v2ex",
+                "read.topic",
+                "v2ex-public-api",
+                "legacy-json-2026-07-31",
+                items,
+            )
+    with pytest.raises(ValueError):
+        ExecutionSuccessV1(
+            PROTOCOL_VERSION,
+            "v2ex",
+            "read.topic",
+            "v2ex-public-api",
+            "legacy-json-2026-07-31",
+            (topic, replies[0]),
+            partial_error_code="transient",
+        )
+    with pytest.raises(ValueError):
+        ExecutionSuccessV1(
+            PROTOCOL_VERSION,
+            "v2ex",
+            "read.topic",
+            "v2ex-public-api",
+            "legacy-json-2026-07-31",
+            (topic,),
+            partial_error_code="invalid_input",
+        )
+
+
+def test_v2ex_result_rejects_unsafe_numeric_ids_and_authors() -> None:
+    unsafe_id = str(1 << 53)
+    invalid_results = (
+        ("browse.hot", (_v2ex_topic_item(native_id=unsafe_id),)),
+        (
+            "read.topic",
+            (_v2ex_topic_item(), _v2ex_reply_item(native_id=unsafe_id)),
+        ),
+        ("read.user", (_v2ex_profile_item(member_id=unsafe_id),)),
+        ("browse.hot", (_v2ex_topic_item(author="bad author"),)),
+        (
+            "read.topic",
+            (_v2ex_topic_item(), _v2ex_reply_item(author="bad author")),
+        ),
+        ("read.user", (_v2ex_profile_item(username="bad author"),)),
+    )
+
+    for operation, items in invalid_results:
+        with pytest.raises(ValueError):
+            ExecutionSuccessV1(
+                PROTOCOL_VERSION,
+                "v2ex",
+                operation,
+                "v2ex-public-api",
+                "legacy-json-2026-07-31",
+                items,
+            )
+
+    nullable_author = ExecutionSuccessV1(
+        PROTOCOL_VERSION,
+        "v2ex",
+        "browse.hot",
+        "v2ex-public-api",
+        "legacy-json-2026-07-31",
+        (_v2ex_topic_item(author=None),),
+    )
+    assert nullable_author.items[0].fields["author"] is None
+
+
+@pytest.mark.parametrize(
+    "published_at",
+    ["1969-12-31T23:59:59+00:00", "2026-07-31T08:00:00+08:00", "2026-02-31T00:00:00+00:00"],
+)
+def test_v2ex_result_rejects_noncanonical_utc_timestamps(published_at: str) -> None:
+    with pytest.raises(ValueError):
+        ExecutionSuccessV1(
+            PROTOCOL_VERSION,
+            "v2ex",
+            "browse.hot",
+            "v2ex-public-api",
+            "legacy-json-2026-07-31",
+            (_v2ex_topic_item(published_at=published_at),),
+        )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///tmp/result",
+        "https://localhost/result",
+        "https://service.local/result",
+        "http://127.0.0.1/result",
+        "https://[::1]/result",
+        "https://user@example.com/result",
+        "https://example.com:8443/result",
+        "https://example.com\\private",
+        "https://例子.测试/result",
+    ],
+)
+def test_exa_result_schema_rejects_unsafe_urls(url: str) -> None:
+    with pytest.raises(ValueError):
+        ExecutionSuccessV1(
+            PROTOCOL_VERSION,
+            "exa",
+            "search.web",
+            "exa-mcporter",
+            "0.12.3+exa-web.v1",
+            (_exa_item(url=url),),
+        )
 
 
 def test_error_taxonomy_is_expanded_but_remains_closed_with_exact_provenance() -> None:
@@ -690,6 +1143,96 @@ def test_fetched_document_rejects_unsafe_metadata(
             ExecutionContextV1((NetworkAccessV1(),)),
             "invalid_request",
         ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "youtube",
+                "search.videos",
+                {"query": "query", "limit": 1, "endpoint": "https://private"},
+            ),
+            ExecutionContextV1((NetworkAccessV1(),)),
+            "invalid_request",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "youtube",
+                "read.subtitles",
+                {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "language": None},
+            ),
+            ExecutionContextV1((NetworkAccessV1(),)),
+            "invalid_request",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "youtube",
+                "read.subtitles",
+                {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "language": "en"},
+            ),
+            ExecutionContextV1((PrivateWorkspaceV1(), NetworkAccessV1())),
+            "invalid_request",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "v2ex",
+                "browse.node_topics",
+                {"node": "python", "page": 0, "limit": 1},
+            ),
+            ExecutionContextV1((NetworkAccessV1(),)),
+            "invalid_request",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "v2ex",
+                "read.topic",
+                {"topic_id": "0"},
+            ),
+            ExecutionContextV1((NetworkAccessV1(),)),
+            "invalid_request",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "exa",
+                "search.web",
+                {"query": "private query", "limit": 20},
+            ),
+            ExecutionContextV1((NetworkAccessV1(),)),
+            "invalid_request",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "exa",
+                "search.web",
+                {"query": "private query", "limit": 20},
+            ),
+            ExecutionContextV1(
+                (
+                    _mcporter_artifacts(Path("/opt/agent-reach")),
+                    NetworkAccessV1(),
+                )
+            ),
+            "invalid_request",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "exa",
+                "search.web",
+                {"query": " private query ", "limit": 20},
+            ),
+            ExecutionContextV1(
+                (
+                    NetworkAccessV1(),
+                    _mcporter_artifacts(Path("/opt/agent-reach")),
+                )
+            ),
+            "invalid_request",
+        ),
     ],
 )
 def test_dispatch_rejects_unknown_authority_before_backend_import(
@@ -707,7 +1250,7 @@ def test_dispatch_rejects_unknown_authority_before_backend_import(
         fromlist: tuple[str, ...] = (),
         level: int = 0,
     ) -> object:
-        if level == 1 and name in {"bilibili", "rss", "youtube"}:
+        if level == 1 and name in {"bilibili", "exa", "rss", "v2ex", "youtube"}:
             raise AssertionError(f"rejected request imported {name}")
         return original_import(name, globals_, locals_, fromlist, level)
 
@@ -746,6 +1289,28 @@ def test_host_cancellation_propagates_without_backend_execution() -> None:
                 {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ"},
             ),
             (NetworkAccessV1(),),
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "youtube",
+                "read.subtitles",
+                {"url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "language": None},
+            ),
+            (NetworkAccessV1(), PrivateWorkspaceV1()),
+        ),
+        (
+            ExecutionRequestV1(PROTOCOL_VERSION, "v2ex", "browse.hot", {"limit": 1}),
+            (NetworkAccessV1(),),
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "exa",
+                "search.web",
+                {"query": "query", "limit": 1},
+            ),
+            (NetworkAccessV1(), _mcporter_artifacts(Path("/opt/agent-reach"))),
         ),
     )
     for request, host_capabilities in cases:

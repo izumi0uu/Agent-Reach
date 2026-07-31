@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
@@ -9,6 +10,7 @@ from .contracts import (
     _MAX_BILIBILI_AUTHOR_CHARACTERS,
     _MAX_BILIBILI_OUTPUT_BYTES,
     _MAX_BILIBILI_QUERY_CHARACTERS,
+    _MAX_EXA_OUTPUT_BYTES,
     _MAX_YOUTUBE_AUTHOR_CHARACTERS,
     _MAX_YOUTUBE_OUTPUT_BYTES,
     FETCHED_DOCUMENT_CAPABILITY,
@@ -23,7 +25,9 @@ from .contracts import (
     MAX_TEXT_CHARACTERS,
     MAX_TITLE_CHARACTERS,
     MAX_URL_CHARACTERS,
+    MCPORTER_ARTIFACTS_CAPABILITY,
     NETWORK_ACCESS_CAPABILITY,
+    PRIVATE_WORKSPACE_CAPABILITY,
     PROTOCOL_VERSION,
     ExecutionContextV1,
     ExecutionErrorCodeV1,
@@ -31,8 +35,11 @@ from .contracts import (
     ExecutionRequestV1,
     ExecutionResultV1,
     FetchedDocumentV1,
+    HostCapabilityV1,
+    McporterArtifactsV1,
     NetworkAccessV1,
     OperationCapabilityV1,
+    PrivateWorkspaceV1,
     _valid_bilibili_video_url,
     _valid_youtube_video_url,
 )
@@ -46,7 +53,7 @@ def _capability(
     result_schema_ids: tuple[str, ...],
     backend_id: str,
     backend_version: str,
-    required_host_capability: str,
+    required_host_capabilities: tuple[str, ...],
     maximum_items: int,
     maximum_output_bytes: int = MAX_OUTPUT_BYTES,
     maximum_author_characters: int = MAX_AUTHOR_CHARACTERS,
@@ -59,7 +66,7 @@ def _capability(
         result_schema_ids=result_schema_ids,
         backend_id=backend_id,
         backend_version=backend_version,
-        required_host_capabilities=(required_host_capability,),
+        required_host_capabilities=required_host_capabilities,
         maximum_items=maximum_items,
         maximum_document_bytes=MAX_DOCUMENT_BYTES,
         maximum_metadata_bytes=MAX_METADATA_BYTES,
@@ -83,7 +90,7 @@ _CAPABILITIES: Final = (
         result_schema_ids=("rss.feed.v1",),
         backend_id="feedparser",
         backend_version="6.0.12",
-        required_host_capability=FETCHED_DOCUMENT_CAPABILITY,
+        required_host_capabilities=(FETCHED_DOCUMENT_CAPABILITY,),
         maximum_items=1,
     ),
     _capability(
@@ -93,7 +100,7 @@ _CAPABILITIES: Final = (
         result_schema_ids=("rss.entry.v1",),
         backend_id="feedparser",
         backend_version="6.0.12",
-        required_host_capability=FETCHED_DOCUMENT_CAPABILITY,
+        required_host_capabilities=(FETCHED_DOCUMENT_CAPABILITY,),
         maximum_items=21,
     ),
     _capability(
@@ -103,7 +110,7 @@ _CAPABILITIES: Final = (
         result_schema_ids=("bilibili.video.v1",),
         backend_id="bili-cli",
         backend_version="0.6.2",
-        required_host_capability=NETWORK_ACCESS_CAPABILITY,
+        required_host_capabilities=(NETWORK_ACCESS_CAPABILITY,),
         maximum_items=50,
         maximum_output_bytes=_MAX_BILIBILI_OUTPUT_BYTES,
         maximum_author_characters=_MAX_BILIBILI_AUTHOR_CHARACTERS,
@@ -115,7 +122,7 @@ _CAPABILITIES: Final = (
         result_schema_ids=("bilibili.video.v1",),
         backend_id="bili-cli",
         backend_version="0.6.2",
-        required_host_capability=NETWORK_ACCESS_CAPABILITY,
+        required_host_capabilities=(NETWORK_ACCESS_CAPABILITY,),
         maximum_items=1,
         maximum_output_bytes=_MAX_BILIBILI_OUTPUT_BYTES,
         maximum_author_characters=_MAX_BILIBILI_AUTHOR_CHARACTERS,
@@ -127,7 +134,7 @@ _CAPABILITIES: Final = (
         result_schema_ids=("bilibili.video.v1",),
         backend_id="bili-cli",
         backend_version="0.6.2",
-        required_host_capability=NETWORK_ACCESS_CAPABILITY,
+        required_host_capabilities=(NETWORK_ACCESS_CAPABILITY,),
         maximum_items=50,
         maximum_output_bytes=_MAX_BILIBILI_OUTPUT_BYTES,
         maximum_author_characters=_MAX_BILIBILI_AUTHOR_CHARACTERS,
@@ -139,7 +146,7 @@ _CAPABILITIES: Final = (
         result_schema_ids=("bilibili.video.v1",),
         backend_id="bili-cli",
         backend_version="0.6.2",
-        required_host_capability=NETWORK_ACCESS_CAPABILITY,
+        required_host_capabilities=(NETWORK_ACCESS_CAPABILITY,),
         maximum_items=50,
         maximum_output_bytes=_MAX_BILIBILI_OUTPUT_BYTES,
         maximum_author_characters=_MAX_BILIBILI_AUTHOR_CHARACTERS,
@@ -151,10 +158,91 @@ _CAPABILITIES: Final = (
         result_schema_ids=("youtube.video.v1",),
         backend_id="yt-dlp",
         backend_version="2026.7.4",
-        required_host_capability=NETWORK_ACCESS_CAPABILITY,
+        required_host_capabilities=(NETWORK_ACCESS_CAPABILITY,),
         maximum_items=1,
         maximum_output_bytes=_MAX_YOUTUBE_OUTPUT_BYTES,
         maximum_author_characters=_MAX_YOUTUBE_AUTHOR_CHARACTERS,
+    ),
+    _capability(
+        source="youtube",
+        operation="search.videos",
+        argument_schema_id="youtube.search.videos.arguments.v1",
+        result_schema_ids=("youtube.video.v1",),
+        backend_id="yt-dlp",
+        backend_version="2026.7.4",
+        required_host_capabilities=(NETWORK_ACCESS_CAPABILITY,),
+        maximum_items=50,
+        maximum_output_bytes=_MAX_YOUTUBE_OUTPUT_BYTES,
+        maximum_author_characters=_MAX_YOUTUBE_AUTHOR_CHARACTERS,
+    ),
+    _capability(
+        source="youtube",
+        operation="read.subtitles",
+        argument_schema_id="youtube.read.subtitles.arguments.v1",
+        result_schema_ids=("youtube.subtitle.v1",),
+        backend_id="yt-dlp",
+        backend_version="2026.7.4",
+        required_host_capabilities=(
+            NETWORK_ACCESS_CAPABILITY,
+            PRIVATE_WORKSPACE_CAPABILITY,
+        ),
+        maximum_items=1,
+        maximum_output_bytes=_MAX_YOUTUBE_OUTPUT_BYTES,
+        maximum_author_characters=_MAX_YOUTUBE_AUTHOR_CHARACTERS,
+    ),
+    _capability(
+        source="v2ex",
+        operation="browse.hot",
+        argument_schema_id="v2ex.browse.hot.arguments.v1",
+        result_schema_ids=("v2ex.topic.v1",),
+        backend_id="v2ex-public-api",
+        backend_version="legacy-json-2026-07-31",
+        required_host_capabilities=(NETWORK_ACCESS_CAPABILITY,),
+        maximum_items=50,
+    ),
+    _capability(
+        source="v2ex",
+        operation="browse.node_topics",
+        argument_schema_id="v2ex.browse.node_topics.arguments.v1",
+        result_schema_ids=("v2ex.topic.v1",),
+        backend_id="v2ex-public-api",
+        backend_version="legacy-json-2026-07-31",
+        required_host_capabilities=(NETWORK_ACCESS_CAPABILITY,),
+        maximum_items=50,
+    ),
+    _capability(
+        source="v2ex",
+        operation="read.topic",
+        argument_schema_id="v2ex.read.topic.arguments.v1",
+        result_schema_ids=("v2ex.topic.v1", "v2ex.reply.v1"),
+        backend_id="v2ex-public-api",
+        backend_version="legacy-json-2026-07-31",
+        required_host_capabilities=(NETWORK_ACCESS_CAPABILITY,),
+        maximum_items=21,
+    ),
+    _capability(
+        source="v2ex",
+        operation="read.user",
+        argument_schema_id="v2ex.read.user.arguments.v1",
+        result_schema_ids=("v2ex.profile.v1",),
+        backend_id="v2ex-public-api",
+        backend_version="legacy-json-2026-07-31",
+        required_host_capabilities=(NETWORK_ACCESS_CAPABILITY,),
+        maximum_items=1,
+    ),
+    _capability(
+        source="exa",
+        operation="search.web",
+        argument_schema_id="exa.search.web.arguments.v1",
+        result_schema_ids=("exa.search.result.v1",),
+        backend_id="exa-mcporter",
+        backend_version="0.12.3+exa-web.v1",
+        required_host_capabilities=(
+            NETWORK_ACCESS_CAPABILITY,
+            MCPORTER_ARTIFACTS_CAPABILITY,
+        ),
+        maximum_items=20,
+        maximum_output_bytes=_MAX_EXA_OUTPUT_BYTES,
     ),
 )
 _CAPABILITY_BY_OPERATION: Final = MappingProxyType(
@@ -214,6 +302,14 @@ def execute(
         from .youtube import execute_youtube
 
         return execute_youtube(request, context)
+    if request.source == "v2ex":
+        from .v2ex import execute_v2ex
+
+        return execute_v2ex(request, context)
+    if request.source == "exa":
+        from .exa import execute_exa
+
+        return execute_exa(request, context)
     return _failure(request, "unsupported_source")
 
 
@@ -256,21 +352,104 @@ def _valid_arguments(
         return _valid_bilibili_video_url(arguments["url"])
     if key == ("youtube", "read.video") and set(arguments) == {"url"}:
         return _valid_youtube_video_url(arguments["url"])
+    if key == ("youtube", "search.videos") and set(arguments) == {"query", "limit"}:
+        return _valid_query_and_limit(arguments, maximum_limit=capability.maximum_items)
+    if key == ("youtube", "read.subtitles") and set(arguments) == {"url", "language"}:
+        language = arguments["language"]
+        return bool(
+            _valid_youtube_video_url(arguments["url"])
+            and (
+                language is None
+                or (
+                    type(language) is str
+                    and 1 <= len(language) <= 32
+                    and language[0].isalnum()
+                    and language.isascii()
+                    and all(character.isalnum() or character in "_-" for character in language)
+                )
+            )
+        )
     if key in {("bilibili", "browse.hot"), ("bilibili", "browse.rank")} and set(arguments) == {
         "limit"
     }:
         limit = arguments["limit"]
         return type(limit) is int and 1 <= limit <= capability.maximum_items
+    if key == ("v2ex", "browse.hot") and set(arguments) == {"limit"}:
+        limit = arguments["limit"]
+        return type(limit) is int and 1 <= limit <= 50
+    if key == ("v2ex", "browse.node_topics") and set(arguments) == {
+        "node",
+        "page",
+        "limit",
+    }:
+        node = arguments["node"]
+        page = arguments["page"]
+        limit = arguments["limit"]
+        return bool(
+            _valid_v2ex_identifier(node)
+            and type(page) is int
+            and 1 <= page <= 100
+            and type(limit) is int
+            and 1 <= limit <= 50
+        )
+    if key == ("v2ex", "read.topic") and set(arguments) == {"topic_id"}:
+        topic_id = arguments["topic_id"]
+        return bool(
+            type(topic_id) is str
+            and topic_id.isascii()
+            and topic_id.isdigit()
+            and 1 <= len(topic_id) <= 32
+            and int(topic_id) > 0
+        )
+    if key == ("v2ex", "read.user") and set(arguments) == {"username"}:
+        return _valid_v2ex_identifier(arguments["username"])
+    if key == ("exa", "search.web") and set(arguments) == {"query", "limit"}:
+        return _valid_query_and_limit(arguments, maximum_limit=50)
     return False
+
+
+def _valid_query_and_limit(
+    arguments: Mapping[str, object],
+    *,
+    maximum_limit: int,
+) -> bool:
+    query = arguments["query"]
+    limit = arguments["limit"]
+    return bool(
+        type(query) is str
+        and query == query.strip()
+        and 1 <= len(query) <= _MAX_BILIBILI_QUERY_CHARACTERS
+        and type(limit) is int
+        and 1 <= limit <= maximum_limit
+    )
+
+
+def _valid_v2ex_identifier(value: object) -> bool:
+    return bool(
+        type(value) is str
+        and value.isascii()
+        and 1 <= len(value) <= 64
+        and value[0].isalnum()
+        and all(character.isalnum() or character in "_-" for character in value)
+    )
 
 
 def _valid_host_capabilities(
     capability: OperationCapabilityV1,
-    host_capabilities: tuple[FetchedDocumentV1 | NetworkAccessV1, ...],
+    host_capabilities: tuple[HostCapabilityV1, ...],
 ) -> bool:
     expected = capability.required_host_capabilities
-    if expected == (FETCHED_DOCUMENT_CAPABILITY,):
-        return len(host_capabilities) == 1 and type(host_capabilities[0]) is FetchedDocumentV1
-    if expected == (NETWORK_ACCESS_CAPABILITY,):
-        return len(host_capabilities) == 1 and type(host_capabilities[0]) is NetworkAccessV1
-    return False
+    actual = tuple(_host_capability_id(capability) for capability in host_capabilities)
+    return actual == expected
+
+
+def _host_capability_id(capability: HostCapabilityV1) -> str:
+    if type(capability) is FetchedDocumentV1:
+        return FETCHED_DOCUMENT_CAPABILITY
+    if type(capability) is NetworkAccessV1:
+        return NETWORK_ACCESS_CAPABILITY
+    if type(capability) is PrivateWorkspaceV1:
+        return PRIVATE_WORKSPACE_CAPABILITY
+    if type(capability) is McporterArtifactsV1:
+        return MCPORTER_ARTIFACTS_CAPABILITY
+    raise AssertionError("unreachable host capability")

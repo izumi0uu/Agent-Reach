@@ -22,12 +22,17 @@ from agent_reach.execution.v1 import (
     ExecutionRequestV1,
     ExecutionSuccessV1,
     NetworkAccessV1,
+    PrivateWorkspaceV1,
     execute,
 )
 
 VIDEO_ID = "dQw4w9WgXcQ"
 VIDEO_URL = f"https://www.youtube.com/watch?v={VIDEO_ID}"
 VERSIONS = {"yt-dlp": "2026.7.4", "yt-dlp-ejs": "0.8.0", "deno": "2.8.3"}
+
+
+class SubtitleCheckpointError(Exception):
+    pass
 
 
 def _request(url: str = VIDEO_URL) -> ExecutionRequestV1:
@@ -39,6 +44,24 @@ def _request(url: str = VIDEO_URL) -> ExecutionRequestV1:
     )
 
 
+def _search_request(query: str = "private query", limit: int = 2) -> ExecutionRequestV1:
+    return ExecutionRequestV1(
+        PROTOCOL_VERSION,
+        "youtube",
+        "search.videos",
+        {"query": query, "limit": limit},
+    )
+
+
+def _subtitle_request(language: str | None = "en") -> ExecutionRequestV1:
+    return ExecutionRequestV1(
+        PROTOCOL_VERSION,
+        "youtube",
+        "read.subtitles",
+        {"url": VIDEO_URL, "language": language},
+    )
+
+
 def _context(
     *,
     checkpoint: Callable[[], None] = lambda: None,
@@ -46,6 +69,35 @@ def _context(
 ) -> ExecutionContextV1:
     return ExecutionContextV1(
         (NetworkAccessV1(),),
+        checkpoint=checkpoint,
+        limits=ExecutionLimitsV1(
+            maximum_items=1,
+            maximum_text_characters=maximum_text_characters,
+        ),
+    )
+
+
+def _search_context(
+    *,
+    maximum_items: int = 50,
+    maximum_text_characters: int = 16_000,
+) -> ExecutionContextV1:
+    return ExecutionContextV1(
+        (NetworkAccessV1(),),
+        limits=ExecutionLimitsV1(
+            maximum_items=maximum_items,
+            maximum_text_characters=maximum_text_characters,
+        ),
+    )
+
+
+def _subtitle_context(
+    *,
+    checkpoint: Callable[[], None] = lambda: None,
+    maximum_text_characters: int = 16_000,
+) -> ExecutionContextV1:
+    return ExecutionContextV1(
+        (NetworkAccessV1(), PrivateWorkspaceV1()),
         checkpoint=checkpoint,
         limits=ExecutionLimitsV1(
             maximum_items=1,
@@ -76,6 +128,7 @@ class FakeDownloader:
     response: object = _video()
     raised: BaseException | None = None
     close_raised: Exception | None = None
+    on_extract: Callable[[str], None] | None = None
 
     def __init__(self, params: dict[str, object]) -> None:
         self.params = params
@@ -86,6 +139,9 @@ class FakeDownloader:
 
     def extract_info(self, target: str, *, download: bool, ie_key: str) -> object:
         self.calls.append((target, download, ie_key))
+        on_extract = type(self).on_extract
+        if on_extract is not None:
+            on_extract(target)
         if self.raised is not None:
             raise self.raised
         return self.response
@@ -114,11 +170,13 @@ def _reset_fake_downloader() -> Iterator[None]:
     FakeDownloader.response = _video()
     FakeDownloader.raised = None
     FakeDownloader.close_raised = None
+    FakeDownloader.on_extract = None
     yield
     FakeDownloader.instances.clear()
     FakeDownloader.response = _video()
     FakeDownloader.raised = None
     FakeDownloader.close_raised = None
+    FakeDownloader.on_extract = None
 
 
 def _adjacent_runtime(tmp_path: Path) -> tuple[Path, Path]:
@@ -161,6 +219,485 @@ def _install_fake_backend(
     monkeypatch.setattr(youtube_execution.sys, "executable", str(executable))
     monkeypatch.setenv("YTDLP_NO_PLUGINS", "ambient")
     return plugins, deno
+
+
+def test_search_uses_exact_backend_call_and_projects_closed_results(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    FakeDownloader.response = {
+        "entries": [
+            _video(),
+            _video(
+                id="aaaaaaaaaaa",
+                title="Second video",
+                description=None,
+                uploader=None,
+                channel="Second channel",
+            ),
+        ]
+    }
+
+    result = execute(_search_request(), _search_context())
+
+    assert isinstance(result, ExecutionSuccessV1)
+    assert result.source == "youtube"
+    assert result.operation == "search.videos"
+    assert result.backend_id == "yt-dlp"
+    assert result.backend_version == "2026.7.4"
+    assert result.truncated is False
+    assert [item.fields["native_id"] for item in result.items] == [VIDEO_ID, "aaaaaaaaaaa"]
+    assert result.items[1].fields == {
+        "text": "Second video",
+        "native_id": "aaaaaaaaaaa",
+        "title": "Second video",
+        "url": "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        "author": "Second channel",
+        "published_at": "2009-10-25",
+        "duration_seconds": 213,
+        "view_count": 42,
+        "comment_count": 7,
+    }
+    instance = FakeDownloader.instances[0]
+    assert instance.calls == [("ytsearch2:private query", False, "YoutubeSearch")]
+    assert instance.closed is True
+    assert "writesubtitles" not in instance.params
+    assert "paths" not in instance.params
+
+
+def test_search_empty_results_and_context_narrowing_are_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    FakeDownloader.response = {"entries": []}
+    empty = execute(_search_request(limit=1), _search_context())
+    FakeDownloader.response = {
+        "entries": [_video(), _video(id="aaaaaaaaaaa")],
+    }
+    narrowed = execute(_search_request(limit=5), _search_context(maximum_items=2))
+
+    assert isinstance(empty, ExecutionSuccessV1)
+    assert empty.items == ()
+    assert empty.truncated is False
+    assert isinstance(narrowed, ExecutionSuccessV1)
+    assert len(narrowed.items) == 2
+    assert narrowed.truncated is True
+    assert FakeDownloader.instances[0].calls == [
+        ("ytsearch1:private query", False, "YoutubeSearch")
+    ]
+    assert FakeDownloader.instances[1].calls == [
+        ("ytsearch2:private query", False, "YoutubeSearch")
+    ]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"entries": (_video(),)},
+        {"entries": [_video(), _video()]},
+        {"entries": [_video(), _video(id="aaaaaaaaaaa")]},
+        {"entries": [BadMapping()]},
+    ],
+)
+def test_search_rejects_invalid_entry_collections(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    response: object,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    FakeDownloader.response = response
+    context = _search_context(maximum_items=1) if isinstance(response, dict) else _search_context()
+
+    result = execute(_search_request(limit=2), context)
+
+    assert isinstance(result, ExecutionFailureV1)
+    assert result.error_code == "backend_contract_violation"
+    assert FakeDownloader.instances[0].close_calls == 1
+
+
+def test_search_source_caps_are_silent_but_context_text_narrowing_is_reported(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    FakeDownloader.response = {"entries": [_video(description="a" * 4_097)]}
+    source_capped = execute(_search_request(limit=1), _search_context())
+    FakeDownloader.response = {"entries": [_video(description="abcdefghijk")]}
+    context_capped = execute(
+        _search_request(limit=1),
+        _search_context(maximum_text_characters=10),
+    )
+
+    assert isinstance(source_capped, ExecutionSuccessV1)
+    assert source_capped.items[0].fields["text"] == "a" * 4_096
+    assert source_capped.truncated is False
+    assert isinstance(context_capped, ExecutionSuccessV1)
+    assert context_capped.items[0].fields["text"] == "abcdefghij"
+    assert context_capped.truncated is True
+
+
+def test_subtitles_use_explicit_language_manual_precedence_and_private_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    subtitle = tmp_path / f"{VIDEO_ID}.en.vtt"
+    subtitle.write_text("WEBVTT\n\n00:00.000 --> 00:01.000\nHello", encoding="utf-8")
+    FakeDownloader.response = {
+        **_video(),
+        "requested_subtitles": {"en": {"ext": "vtt", "filepath": str(subtitle)}},
+        "subtitles": {"en": [{"ext": "vtt", "url": "private"}]},
+        "automatic_captions": {"en": [{"ext": "vtt", "url": "private"}]},
+    }
+
+    result = execute(_subtitle_request(), _subtitle_context())
+
+    assert isinstance(result, ExecutionSuccessV1)
+    assert result.operation == "read.subtitles"
+    assert result.truncated is False
+    assert result.items[0].schema_id == "youtube.subtitle.v1"
+    assert result.items[0].fields == {
+        "text": "WEBVTT\n\n00:00.000 --> 00:01.000\nHello",
+        "native_id": VIDEO_ID,
+        "title": "Video title",
+        "url": VIDEO_URL,
+        "language": "en",
+        "origin": "manual",
+    }
+    instance = FakeDownloader.instances[0]
+    assert instance.calls == [(VIDEO_URL, True, "Youtube")]
+    assert instance.params["subtitleslangs"] == ["en"]
+    assert instance.params["writesubtitles"] is True
+    assert instance.params["writeautomaticsub"] is True
+    assert instance.params["subtitlesformat"] == "vtt"
+    assert instance.params["skip_download"] is True
+    assert instance.params["paths"] == {
+        "home": str(tmp_path),
+        "temp": str(tmp_path),
+        "subtitle": str(tmp_path),
+    }
+    assert instance.params["outtmpl"] == {
+        "default": str(tmp_path / "%(id)s.%(ext)s"),
+        "subtitle": str(tmp_path / "%(id)s.%(ext)s"),
+    }
+    assert subtitle.exists() is False
+    assert (tmp_path / "bin").is_dir()
+
+
+@pytest.mark.parametrize(
+    ("body", "maximum_text", "expected_prefix"),
+    [
+        ("WEBVTT\n" + ("a" * (256 * 1_024)), 16_000, "WEBVTT\n" + ("a" * 10)),
+        ("WEBVTT\nabcdefghijk", 10, "WEBVTT\nabc"),
+    ],
+)
+def test_subtitle_source_and_context_truncation_are_ored(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    body: str,
+    maximum_text: int,
+    expected_prefix: str,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    subtitle = tmp_path / f"{VIDEO_ID}.zh-Hans.vtt"
+    subtitle.write_text(body, encoding="utf-8")
+    FakeDownloader.response = {
+        **_video(),
+        "requested_subtitles": {"zh-Hans": {"ext": "vtt", "filepath": str(subtitle)}},
+        "subtitles": {},
+        "automatic_captions": {"zh-Hans": [{"ext": "vtt"}]},
+    }
+
+    result = execute(
+        _subtitle_request(None),
+        _subtitle_context(maximum_text_characters=maximum_text),
+    )
+
+    assert isinstance(result, ExecutionSuccessV1)
+    assert result.items[0].fields["language"] == "zh-Hans"
+    assert result.items[0].fields["origin"] == "automatic"
+    assert cast(str, result.items[0].fields["text"]).startswith(expected_prefix)
+    assert result.truncated is True
+    assert FakeDownloader.instances[0].params["subtitleslangs"] == ["zh-Hans", "zh", "en"]
+    assert subtitle.exists() is False
+
+
+@pytest.mark.parametrize(
+    "requested_subtitles",
+    [{}, {"zh": {"ext": "vtt", "filepath": "/private/zh.vtt"}}, {"live_chat": {}}],
+)
+def test_subtitle_absence_or_language_mismatch_is_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    requested_subtitles: object,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    FakeDownloader.response = {
+        **_video(),
+        "requested_subtitles": requested_subtitles,
+        "subtitles": {},
+        "automatic_captions": {},
+    }
+
+    result = execute(_subtitle_request(), _subtitle_context())
+
+    assert isinstance(result, ExecutionFailureV1)
+    assert result.error_code == "not_found"
+    assert FakeDownloader.instances[0].close_calls == 1
+
+
+@pytest.mark.parametrize("failure", ["format", "origin", "path"])
+def test_subtitle_projection_failure_cleans_new_private_files(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    subtitle = tmp_path / f"{VIDEO_ID}.en.vtt"
+    FakeDownloader.on_extract = lambda _target: subtitle.write_text("WEBVTT\n", encoding="utf-8")
+    selected: dict[str, object] = {
+        "ext": "srt" if failure == "format" else "vtt",
+        "filepath": 1 if failure == "path" else str(subtitle),
+    }
+    FakeDownloader.response = {
+        **_video(),
+        "requested_subtitles": {"en": selected},
+        "subtitles": {} if failure == "origin" else {"en": [{"ext": "vtt"}]},
+        "automatic_captions": {},
+    }
+
+    result = execute(_subtitle_request(), _subtitle_context())
+
+    assert isinstance(result, ExecutionFailureV1)
+    assert result.error_code == "backend_contract_violation"
+    assert subtitle.exists() is False
+    assert FakeDownloader.instances[0].close_calls == 1
+
+
+def test_subtitle_path_escape_is_rejected_without_removing_external_file(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    root.mkdir()
+    outside = tmp_path / "outside.vtt"
+    outside.write_text("WEBVTT\n", encoding="utf-8")
+
+    with pytest.raises(youtube_execution._BackendContractError):
+        youtube_execution._read_subtitle_file(outside, root, lambda: None)
+
+    assert outside.exists() is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink aliases require POSIX semantics")
+def test_subtitle_path_accepts_a_resolved_private_root_alias(tmp_path: Path) -> None:
+    root = tmp_path / "private"
+    root.mkdir()
+    alias = tmp_path / "private-alias"
+    alias.symlink_to(root, target_is_directory=True)
+    subtitle = root / f"{VIDEO_ID}.en.vtt"
+    subtitle.write_text("WEBVTT\n\nHello", encoding="utf-8")
+
+    text, truncated = youtube_execution._read_subtitle_file(
+        alias / subtitle.name,
+        alias,
+        lambda: None,
+    )
+
+    assert text.endswith("Hello")
+    assert truncated is False
+    assert subtitle.exists() is False
+
+
+@pytest.mark.skipif(os.name == "nt", reason="link shape checks require POSIX semantics")
+@pytest.mark.parametrize("kind", ["symlink", "hardlink"])
+def test_subtitle_execution_rejects_links_and_cleans_only_the_new_link(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "bin" / "target.vtt"
+    target.write_text("WEBVTT\n", encoding="utf-8")
+    subtitle = tmp_path / f"{VIDEO_ID}.en.vtt"
+
+    def create_link(_target: str) -> None:
+        if kind == "symlink":
+            subtitle.symlink_to(target)
+        else:
+            os.link(target, subtitle)
+
+    FakeDownloader.on_extract = create_link
+    FakeDownloader.response = {
+        **_video(),
+        "requested_subtitles": {"en": {"ext": "vtt", "filepath": str(subtitle)}},
+        "subtitles": {"en": [{"ext": "vtt"}]},
+        "automatic_captions": {},
+    }
+
+    result = execute(_subtitle_request(), _subtitle_context())
+
+    assert isinstance(result, ExecutionFailureV1)
+    assert result.error_code == "backend_contract_violation"
+    assert subtitle.exists() is False
+    assert subtitle.is_symlink() is False
+    assert target.exists() is True
+
+
+@pytest.mark.parametrize(
+    "body",
+    [b"WEBVTT\n" + (b"a" * (512 * 1_024)), b"WEBVTT\n\xff", b"plain text"],
+)
+def test_subtitle_file_rejects_oversize_invalid_utf8_and_non_vtt(
+    tmp_path: Path,
+    body: bytes,
+) -> None:
+    subtitle = tmp_path / "subtitle.vtt"
+    subtitle.write_bytes(body)
+
+    with pytest.raises(youtube_execution._BackendContractError):
+        youtube_execution._read_subtitle_file(subtitle, tmp_path, lambda: None)
+
+    assert subtitle.exists() is False
+
+
+def test_subtitle_file_rejects_inode_swap_and_detects_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    subtitle = tmp_path / "subtitle.vtt"
+    subtitle.write_text("WEBVTT\n", encoding="utf-8")
+    replacement = tmp_path / "replacement.vtt"
+    replacement.write_text("WEBVTT\nreplacement", encoding="utf-8")
+    real_fstat = os.fstat
+    monkeypatch.setattr(youtube_execution.os, "fstat", lambda _descriptor: replacement.stat())
+
+    with pytest.raises(youtube_execution._BackendContractError):
+        youtube_execution._read_subtitle_file(subtitle, tmp_path, lambda: None)
+
+    assert subtitle.exists() is False
+    assert replacement.exists() is True
+
+    subtitle.write_text("WEBVTT\n", encoding="utf-8")
+    calls = 0
+
+    def changed_after_read(descriptor: int) -> object:
+        nonlocal calls
+        calls += 1
+        details = real_fstat(descriptor)
+        if calls == 1:
+            return details
+        return SimpleNamespace(st_size=details.st_size, st_mtime_ns=details.st_mtime_ns + 1)
+
+    monkeypatch.setattr(youtube_execution.os, "fstat", changed_after_read)
+    with pytest.raises(youtube_execution._BackendContractError):
+        youtube_execution._read_subtitle_file(subtitle, tmp_path, lambda: None)
+    assert subtitle.exists() is False
+
+
+def test_subtitle_cancellation_closes_backend_and_cleans_new_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    subtitle = tmp_path / f"{VIDEO_ID}.en.vtt"
+    FakeDownloader.on_extract = lambda _target: subtitle.write_text("WEBVTT\n", encoding="utf-8")
+    FakeDownloader.raised = asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        execute(_subtitle_request(), _subtitle_context())
+
+    assert subtitle.exists() is False
+    assert FakeDownloader.instances[0].close_calls == 1
+
+
+@pytest.mark.parametrize(
+    "failure_type",
+    [asyncio.CancelledError, TimeoutError, SubtitleCheckpointError],
+    ids=["cancelled", "timeout", "custom"],
+)
+@pytest.mark.parametrize("close_fails", [False, True], ids=["close-ok", "close-error"])
+def test_subtitle_read_checkpoint_failure_propagates_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failure_type: type[BaseException],
+    close_fails: bool,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    subtitle = tmp_path / f"{VIDEO_ID}.en.vtt"
+    subtitle.write_text("WEBVTT\n", encoding="utf-8")
+    FakeDownloader.response = {
+        **_video(),
+        "requested_subtitles": {"en": {"ext": "vtt", "filepath": str(subtitle)}},
+        "subtitles": {"en": [{"ext": "vtt"}]},
+        "automatic_captions": {},
+    }
+    checkpoints = 0
+    close_calls = 0
+    failure = failure_type("host checkpoint detail")
+    real_close = os.close
+
+    def fail_during_read() -> None:
+        nonlocal checkpoints
+        checkpoints += 1
+        if checkpoints == 3:
+            raise failure
+
+    def close(descriptor: int) -> None:
+        nonlocal close_calls
+        close_calls += 1
+        real_close(descriptor)
+        if close_fails:
+            raise OSError("cleanup detail")
+
+    monkeypatch.setattr(youtube_execution.os, "close", close)
+
+    with pytest.raises(failure_type) as raised:
+        execute(
+            _subtitle_request(),
+            _subtitle_context(checkpoint=fail_during_read),
+        )
+
+    assert raised.value is failure
+    assert checkpoints == 3
+    assert close_calls == 1
+    assert subtitle.exists() is False
+    assert FakeDownloader.instances[0].close_calls == 1
+
+
+def test_subtitle_os_read_failure_remains_a_closed_contract_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    subtitle = tmp_path / f"{VIDEO_ID}.en.vtt"
+    subtitle.write_text("WEBVTT\n", encoding="utf-8")
+    FakeDownloader.response = {
+        **_video(),
+        "requested_subtitles": {"en": {"ext": "vtt", "filepath": str(subtitle)}},
+        "subtitles": {"en": [{"ext": "vtt"}]},
+        "automatic_captions": {},
+    }
+
+    def fail_read(_descriptor: int, _length: int) -> bytes:
+        raise OSError("private read detail")
+
+    monkeypatch.setattr(youtube_execution.os, "read", fail_read)
+
+    result = execute(_subtitle_request(), _subtitle_context())
+
+    assert isinstance(result, ExecutionFailureV1)
+    assert result.error_code == "backend_contract_violation"
+    assert "private" not in repr(result)
+    assert subtitle.exists() is False
+    assert FakeDownloader.instances[0].close_calls == 1
 
 
 def test_read_video_uses_exact_backend_call_and_closed_options(
