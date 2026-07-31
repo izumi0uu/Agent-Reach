@@ -57,6 +57,7 @@ _BVID: Final = re.compile(r"BV[A-Za-z0-9]{10}")
 _YOUTUBE_VIDEO_ID: Final = re.compile(r"[A-Za-z0-9_-]{11}")
 _YOUTUBE_VIDEO_URL: Final = re.compile(r"https://www[.]youtube[.]com/watch[?]v=([A-Za-z0-9_-]{11})")
 _YOUTUBE_LANGUAGE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")
+_YOUTUBE_SUBTITLE_MARKER: Final = "WEBVTT"
 _POSITIVE_DECIMAL: Final = re.compile(r"[1-9][0-9]{0,31}")
 _V2EX_IDENTIFIER: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _SHA256: Final = re.compile(r"[0-9a-f]{64}")
@@ -865,7 +866,7 @@ def _valid_youtube_subtitle_item(item: ExecutionItemV1) -> bool:
         and _YOUTUBE_LANGUAGE.fullmatch(language)
         and item.fields.get("origin") in {"manual", "automatic"}
         and type(text) is str
-        and text.lstrip("\ufeff\r\n ").startswith("WEBVTT")
+        and text.lstrip("\ufeff\r\n ").startswith(_YOUTUBE_SUBTITLE_MARKER)
     )
 
 

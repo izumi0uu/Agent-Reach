@@ -686,13 +686,16 @@ def _exchange_process(
 
 def _kill_and_reap(process: subprocess.Popen[bytes]) -> None:
     group_signalled = False
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-        group_signalled = True
-    except (ProcessLookupError, PermissionError):
-        pass
-    except OSError:
-        pass
+    killpg = getattr(os, "killpg", None)
+    sigkill = getattr(signal, "SIGKILL", None)
+    if callable(killpg) and sigkill is not None:
+        try:
+            killpg(process.pid, sigkill)
+            group_signalled = True
+        except (ProcessLookupError, PermissionError):
+            pass
+        except OSError:
+            pass
     if not group_signalled and process.poll() is None:
         try:
             process.kill()

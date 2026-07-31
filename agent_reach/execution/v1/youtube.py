@@ -6,6 +6,7 @@ import math
 import os
 import stat
 import sys
+import tempfile
 from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from typing import Final, cast
 
 from .contracts import (
     _YOUTUBE_LANGUAGE,
+    _YOUTUBE_SUBTITLE_MARKER,
     MAX_TEXT_CHARACTERS,
     PROTOCOL_VERSION,
     ExecutionContextV1,
@@ -217,23 +219,49 @@ def _invoke_backend(
     private_root = _private_workspace_root() if request.operation == "read.subtitles" else None
     language = request.arguments.get("language")
     subtitle_languages: tuple[str, ...] | None = None
-    if private_root is not None:
-        if language is not None and type(language) is not str:
-            raise _BackendContractError("request invalid")
-        subtitle_languages = (language,) if language is not None else _DEFAULT_SUBTITLE_LANGUAGES
-    existing_entries = _workspace_entry_names(private_root) if private_root is not None else None
-    try:
+    if private_root is None:
         return _invoke_downloader(
             backend,
             request,
             context,
-            private_root=private_root,
+            private_root=None,
+            subtitle_languages=None,
+            checkpoint=checkpoint,
+        )
+    if language is not None and type(language) is not str:
+        raise _BackendContractError("request invalid")
+    subtitle_languages = (language,) if language is not None else _DEFAULT_SUBTITLE_LANGUAGES
+    try:
+        temporary = tempfile.TemporaryDirectory(
+            prefix=".agent-reach-youtube-",
+            dir=str(private_root),
+        )
+    except OSError:
+        raise _BackendContractError("private workspace invalid") from None
+    try:
+        try:
+            temporary_path = Path(temporary.name)
+            details = temporary_path.lstat()
+            subtitle_root = temporary_path.resolve(strict=True)
+        except OSError:
+            raise _BackendContractError("private workspace invalid") from None
+        if not stat.S_ISDIR(details.st_mode) or subtitle_root.parent != private_root:
+            raise _BackendContractError("private workspace invalid")
+        return _invoke_downloader(
+            backend,
+            request,
+            context,
+            private_root=subtitle_root,
             subtitle_languages=subtitle_languages,
             checkpoint=checkpoint,
         )
     finally:
-        if private_root is not None and existing_entries is not None:
-            _cleanup_new_workspace_files(private_root, existing_entries)
+        active_error = sys.exc_info()[1]
+        try:
+            temporary.cleanup()
+        except OSError:
+            if active_error is None:
+                raise _BackendContractError("private workspace cleanup failed") from None
 
 
 def _invoke_downloader(
@@ -284,31 +312,6 @@ def _invoke_downloader(
         raise
     _close_after_success(cast(Callable[[], object], close))
     return result
-
-
-def _workspace_entry_names(root: Path) -> frozenset[str]:
-    try:
-        with os.scandir(root) as entries:
-            return frozenset(entry.name for entry in entries)
-    except OSError:
-        raise _BackendContractError("private workspace invalid") from None
-
-
-def _cleanup_new_workspace_files(root: Path, existing_entries: frozenset[str]) -> None:
-    try:
-        with os.scandir(root) as entries:
-            candidates = tuple(
-                entry.path for entry in entries if entry.name not in existing_entries
-            )
-    except OSError:
-        return
-    for candidate in candidates:
-        try:
-            details = os.lstat(candidate)
-            if not stat.S_ISDIR(details.st_mode):
-                os.unlink(candidate)
-        except OSError:
-            pass
 
 
 def _close_after_failure(close: Callable[[], object]) -> None:
@@ -690,7 +693,7 @@ def _read_subtitle_file(
         text = data.decode("utf-8", errors="strict")
     except UnicodeError:
         raise _BackendContractError("backend subtitle encoding invalid") from None
-    if not text.lstrip("\ufeff\r\n ").startswith("WEBVTT"):
+    if not text.lstrip("\ufeff\r\n ").startswith(_YOUTUBE_SUBTITLE_MARKER):
         raise _BackendContractError("backend subtitle format invalid")
     return _truncate_utf8_with_flag(text, _MAX_SUBTITLE_TEXT_BYTES)
 
