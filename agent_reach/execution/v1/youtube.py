@@ -6,6 +6,7 @@ import math
 import os
 import stat
 import sys
+from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date
@@ -408,19 +409,17 @@ def _backend_error_code(error: Exception) -> ExecutionErrorCodeV1:
 
 
 def _exception_chain(error: Exception) -> tuple[BaseException, ...]:
-    pending: list[BaseException] = [error]
+    pending: deque[BaseException] = deque((error,))
     seen: set[int] = set()
     result: list[BaseException] = []
     while pending and len(result) < 16:
-        current = pending.pop()
+        current = pending.popleft()
         if id(current) in seen:
             continue
         seen.add(id(current))
         result.append(current)
         if current.__cause__ is not None:
             pending.append(current.__cause__)
-        if current.__context__ is not None:
-            pending.append(current.__context__)
         exc_info = getattr(current, "exc_info", None)
         if (
             isinstance(exc_info, tuple)
@@ -428,6 +427,8 @@ def _exception_chain(error: Exception) -> tuple[BaseException, ...]:
             and isinstance(exc_info[1], BaseException)
         ):
             pending.append(exc_info[1])
+        if current.__context__ is not None:
+            pending.append(current.__context__)
     return tuple(result)
 
 
