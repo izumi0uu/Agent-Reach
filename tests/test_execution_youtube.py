@@ -125,10 +125,10 @@ def _video(**overrides: object) -> dict[str, object]:
 
 class FakeDownloader:
     instances: list[FakeDownloader] = []
-    response: object = _video()
+    response: object | Callable[[FakeDownloader], object] = _video()
     raised: BaseException | None = None
     close_raised: Exception | None = None
-    on_extract: Callable[[str], None] | None = None
+    on_extract: Callable[[FakeDownloader, str], None] | None = None
 
     def __init__(self, params: dict[str, object]) -> None:
         self.params = params
@@ -141,16 +141,45 @@ class FakeDownloader:
         self.calls.append((target, download, ie_key))
         on_extract = type(self).on_extract
         if on_extract is not None:
-            on_extract(target)
+            on_extract(self, target)
         if self.raised is not None:
             raise self.raised
-        return self.response
+        response = type(self).response
+        return response(self) if callable(response) else response
 
     def close(self) -> None:
         self.closed = True
         self.close_calls += 1
         if self.close_raised is not None:
             raise self.close_raised
+
+
+def _subtitle_output_root(downloader: FakeDownloader) -> Path:
+    paths = downloader.params.get("paths")
+    assert isinstance(paths, dict)
+    root = paths.get("subtitle")
+    assert isinstance(root, str)
+    return Path(root)
+
+
+def _subtitle_backend_response(
+    downloader: FakeDownloader,
+    body: str = "WEBVTT\n",
+    *,
+    language: str = "en",
+    origin: str = "manual",
+) -> dict[str, object]:
+    root = _subtitle_output_root(downloader)
+    subtitle = root / f"{VIDEO_ID}.{language}.vtt"
+    subtitle.write_text(body, encoding="utf-8")
+    return {
+        **_video(),
+        "requested_subtitles": {
+            language: {"ext": "vtt", "filepath": str(subtitle)},
+        },
+        "subtitles": {language: [{"ext": "vtt"}]} if origin == "manual" else {},
+        "automatic_captions": ({language: [{"ext": "vtt"}]} if origin == "automatic" else {}),
+    }
 
 
 class BadMapping(Mapping[str, object]):
@@ -338,20 +367,59 @@ def test_search_source_caps_are_silent_but_context_text_narrowing_is_reported(
     assert context_capped.truncated is True
 
 
+def test_subtitle_text_limit_below_webvtt_marker_fails_before_backend_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend_loads = 0
+    checkpoints = 0
+
+    def load_backend() -> object:
+        nonlocal backend_loads
+        backend_loads += 1
+        raise AssertionError("narrow subtitle limit reached backend loading")
+
+    def checkpoint() -> None:
+        nonlocal checkpoints
+        checkpoints += 1
+
+    monkeypatch.setattr(youtube_execution, "_load_backend", load_backend)
+
+    result = execute(
+        _subtitle_request(),
+        _subtitle_context(
+            checkpoint=checkpoint,
+            maximum_text_characters=len("WEBVTT") - 1,
+        ),
+    )
+
+    assert isinstance(result, ExecutionFailureV1)
+    assert result.error_code == "invalid_input"
+    assert result.source == "youtube"
+    assert result.operation == "read.subtitles"
+    assert result.backend_id is None
+    assert result.backend_version is None
+    assert backend_loads == 0
+    assert checkpoints == 0
+
+
 def test_subtitles_use_explicit_language_manual_precedence_and_private_output(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     _install_fake_backend(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
-    subtitle = tmp_path / f"{VIDEO_ID}.en.vtt"
-    subtitle.write_text("WEBVTT\n\n00:00.000 --> 00:01.000\nHello", encoding="utf-8")
-    FakeDownloader.response = {
-        **_video(),
-        "requested_subtitles": {"en": {"ext": "vtt", "filepath": str(subtitle)}},
-        "subtitles": {"en": [{"ext": "vtt", "url": "private"}]},
-        "automatic_captions": {"en": [{"ext": "vtt", "url": "private"}]},
-    }
+    sibling = tmp_path / "created-during-subtitle-call.txt"
+
+    def response(downloader: FakeDownloader) -> object:
+        sibling.write_text("unrelated", encoding="utf-8")
+        value = _subtitle_backend_response(
+            downloader,
+            "WEBVTT\n\n00:00.000 --> 00:01.000\nHello",
+        )
+        value["automatic_captions"] = {"en": [{"ext": "vtt", "url": "private"}]}
+        return value
+
+    FakeDownloader.response = response
 
     result = execute(_subtitle_request(), _subtitle_context())
 
@@ -374,17 +442,46 @@ def test_subtitles_use_explicit_language_manual_precedence_and_private_output(
     assert instance.params["writeautomaticsub"] is True
     assert instance.params["subtitlesformat"] == "vtt"
     assert instance.params["skip_download"] is True
+    subtitle_root = _subtitle_output_root(instance)
     assert instance.params["paths"] == {
-        "home": str(tmp_path),
-        "temp": str(tmp_path),
-        "subtitle": str(tmp_path),
+        "home": str(subtitle_root),
+        "temp": str(subtitle_root),
+        "subtitle": str(subtitle_root),
     }
     assert instance.params["outtmpl"] == {
-        "default": str(tmp_path / "%(id)s.%(ext)s"),
-        "subtitle": str(tmp_path / "%(id)s.%(ext)s"),
+        "default": str(subtitle_root / "%(id)s.%(ext)s"),
+        "subtitle": str(subtitle_root / "%(id)s.%(ext)s"),
     }
-    assert subtitle.exists() is False
+    assert subtitle_root.parent == tmp_path
+    assert subtitle_root.name.startswith(".agent-reach-youtube-")
+    assert subtitle_root.exists() is False
+    assert sibling.read_text(encoding="utf-8") == "unrelated"
     assert (tmp_path / "bin").is_dir()
+
+
+def test_subtitle_calls_use_distinct_temporary_output_directories(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path)
+    roots: list[Path] = []
+
+    def response(downloader: FakeDownloader) -> object:
+        roots.append(_subtitle_output_root(downloader))
+        return _subtitle_backend_response(downloader)
+
+    FakeDownloader.response = response
+
+    results = (
+        execute(_subtitle_request(), _subtitle_context()),
+        execute(_subtitle_request(), _subtitle_context()),
+    )
+
+    assert all(isinstance(result, ExecutionSuccessV1) for result in results)
+    assert len(set(roots)) == 2
+    assert all(root.parent == tmp_path for root in roots)
+    assert all(not root.exists() for root in roots)
 
 
 @pytest.mark.parametrize(
@@ -392,6 +489,7 @@ def test_subtitles_use_explicit_language_manual_precedence_and_private_output(
     [
         ("WEBVTT\n" + ("a" * (256 * 1_024)), 16_000, "WEBVTT\n" + ("a" * 10)),
         ("WEBVTT\nabcdefghijk", 10, "WEBVTT\nabc"),
+        ("WEBVTT\nabcdefghijk", len("WEBVTT"), "WEBVTT"),
     ],
 )
 def test_subtitle_source_and_context_truncation_are_ored(
@@ -403,14 +501,12 @@ def test_subtitle_source_and_context_truncation_are_ored(
 ) -> None:
     _install_fake_backend(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
-    subtitle = tmp_path / f"{VIDEO_ID}.zh-Hans.vtt"
-    subtitle.write_text(body, encoding="utf-8")
-    FakeDownloader.response = {
-        **_video(),
-        "requested_subtitles": {"zh-Hans": {"ext": "vtt", "filepath": str(subtitle)}},
-        "subtitles": {},
-        "automatic_captions": {"zh-Hans": [{"ext": "vtt"}]},
-    }
+    FakeDownloader.response = lambda downloader: _subtitle_backend_response(
+        downloader,
+        body,
+        language="zh-Hans",
+        origin="automatic",
+    )
 
     result = execute(
         _subtitle_request(None),
@@ -423,7 +519,7 @@ def test_subtitle_source_and_context_truncation_are_ored(
     assert cast(str, result.items[0].fields["text"]).startswith(expected_prefix)
     assert result.truncated is True
     assert FakeDownloader.instances[0].params["subtitleslangs"] == ["zh-Hans", "zh", "en"]
-    assert subtitle.exists() is False
+    assert _subtitle_output_root(FakeDownloader.instances[0]).exists() is False
 
 
 @pytest.mark.parametrize(
@@ -452,32 +548,39 @@ def test_subtitle_absence_or_language_mismatch_is_not_found(
 
 
 @pytest.mark.parametrize("failure", ["format", "origin", "path"])
-def test_subtitle_projection_failure_cleans_new_private_files(
+def test_subtitle_projection_failure_cleans_call_directory_without_touching_siblings(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     failure: str,
 ) -> None:
     _install_fake_backend(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
-    subtitle = tmp_path / f"{VIDEO_ID}.en.vtt"
-    FakeDownloader.on_extract = lambda _target: subtitle.write_text("WEBVTT\n", encoding="utf-8")
-    selected: dict[str, object] = {
-        "ext": "srt" if failure == "format" else "vtt",
-        "filepath": 1 if failure == "path" else str(subtitle),
-    }
-    FakeDownloader.response = {
-        **_video(),
-        "requested_subtitles": {"en": selected},
-        "subtitles": {} if failure == "origin" else {"en": [{"ext": "vtt"}]},
-        "automatic_captions": {},
-    }
+    sibling = tmp_path / "unrelated-concurrent-output.txt"
+
+    def response(downloader: FakeDownloader) -> object:
+        sibling.write_text("preserve", encoding="utf-8")
+        nested = _subtitle_output_root(downloader) / "nested"
+        nested.mkdir()
+        (nested / "backend.tmp").write_text("cleanup", encoding="utf-8")
+        value = _subtitle_backend_response(downloader)
+        requested = cast(dict[str, dict[str, object]], value["requested_subtitles"])
+        requested["en"]["ext"] = "srt" if failure == "format" else "vtt"
+        if failure == "path":
+            requested["en"]["filepath"] = 1
+        if failure == "origin":
+            value["subtitles"] = {}
+        return value
+
+    FakeDownloader.response = response
 
     result = execute(_subtitle_request(), _subtitle_context())
 
     assert isinstance(result, ExecutionFailureV1)
     assert result.error_code == "backend_contract_violation"
-    assert subtitle.exists() is False
-    assert FakeDownloader.instances[0].close_calls == 1
+    instance = FakeDownloader.instances[0]
+    assert _subtitle_output_root(instance).exists() is False
+    assert sibling.read_text(encoding="utf-8") == "preserve"
+    assert instance.close_calls == 1
 
 
 def test_subtitle_path_escape_is_rejected_without_removing_external_file(tmp_path: Path) -> None:
@@ -523,28 +626,28 @@ def test_subtitle_execution_rejects_links_and_cleans_only_the_new_link(
     monkeypatch.chdir(tmp_path)
     target = tmp_path / "bin" / "target.vtt"
     target.write_text("WEBVTT\n", encoding="utf-8")
-    subtitle = tmp_path / f"{VIDEO_ID}.en.vtt"
 
-    def create_link(_target: str) -> None:
+    def response(downloader: FakeDownloader) -> object:
+        subtitle = _subtitle_output_root(downloader) / f"{VIDEO_ID}.en.vtt"
         if kind == "symlink":
             subtitle.symlink_to(target)
         else:
             os.link(target, subtitle)
+        return {
+            **_video(),
+            "requested_subtitles": {"en": {"ext": "vtt", "filepath": str(subtitle)}},
+            "subtitles": {"en": [{"ext": "vtt"}]},
+            "automatic_captions": {},
+        }
 
-    FakeDownloader.on_extract = create_link
-    FakeDownloader.response = {
-        **_video(),
-        "requested_subtitles": {"en": {"ext": "vtt", "filepath": str(subtitle)}},
-        "subtitles": {"en": [{"ext": "vtt"}]},
-        "automatic_captions": {},
-    }
+    FakeDownloader.response = response
 
     result = execute(_subtitle_request(), _subtitle_context())
 
     assert isinstance(result, ExecutionFailureV1)
     assert result.error_code == "backend_contract_violation"
-    assert subtitle.exists() is False
-    assert subtitle.is_symlink() is False
+    subtitle_root = _subtitle_output_root(FakeDownloader.instances[0])
+    assert subtitle_root.exists() is False
     assert target.exists() is True
 
 
@@ -605,15 +708,21 @@ def test_subtitle_cancellation_closes_backend_and_cleans_new_file(
 ) -> None:
     _install_fake_backend(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
-    subtitle = tmp_path / f"{VIDEO_ID}.en.vtt"
-    FakeDownloader.on_extract = lambda _target: subtitle.write_text("WEBVTT\n", encoding="utf-8")
+
+    def create_output(downloader: FakeDownloader, _target: str) -> None:
+        nested = _subtitle_output_root(downloader) / "nested"
+        nested.mkdir()
+        (nested / "partial.vtt").write_text("WEBVTT\n", encoding="utf-8")
+
+    FakeDownloader.on_extract = create_output
     FakeDownloader.raised = asyncio.CancelledError()
 
     with pytest.raises(asyncio.CancelledError):
         execute(_subtitle_request(), _subtitle_context())
 
-    assert subtitle.exists() is False
-    assert FakeDownloader.instances[0].close_calls == 1
+    instance = FakeDownloader.instances[0]
+    assert _subtitle_output_root(instance).exists() is False
+    assert instance.close_calls == 1
 
 
 @pytest.mark.parametrize(
@@ -630,17 +739,13 @@ def test_subtitle_read_checkpoint_failure_propagates_unchanged(
 ) -> None:
     _install_fake_backend(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
-    subtitle = tmp_path / f"{VIDEO_ID}.en.vtt"
-    subtitle.write_text("WEBVTT\n", encoding="utf-8")
-    FakeDownloader.response = {
-        **_video(),
-        "requested_subtitles": {"en": {"ext": "vtt", "filepath": str(subtitle)}},
-        "subtitles": {"en": [{"ext": "vtt"}]},
-        "automatic_captions": {},
-    }
+    FakeDownloader.response = _subtitle_backend_response
     checkpoints = 0
     close_calls = 0
+    subtitle_descriptor = -1
+    subtitle_closed = False
     failure = failure_type("host checkpoint detail")
+    real_open = os.open
     real_close = os.close
 
     def fail_during_read() -> None:
@@ -649,13 +754,24 @@ def test_subtitle_read_checkpoint_failure_propagates_unchanged(
         if checkpoints == 3:
             raise failure
 
+    def open_file(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        nonlocal subtitle_descriptor
+        descriptor = real_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+        if Path(path).suffix == ".vtt":  # type: ignore[arg-type]
+            subtitle_descriptor = descriptor
+        return descriptor
+
     def close(descriptor: int) -> None:
-        nonlocal close_calls
-        close_calls += 1
+        nonlocal close_calls, subtitle_closed
+        closing_subtitle = descriptor == subtitle_descriptor and not subtitle_closed
         real_close(descriptor)
-        if close_fails:
+        if closing_subtitle:
+            subtitle_closed = True
+            close_calls += 1
+        if closing_subtitle and close_fails:
             raise OSError("cleanup detail")
 
+    monkeypatch.setattr(youtube_execution.os, "open", open_file)
     monkeypatch.setattr(youtube_execution.os, "close", close)
 
     with pytest.raises(failure_type) as raised:
@@ -667,8 +783,9 @@ def test_subtitle_read_checkpoint_failure_propagates_unchanged(
     assert raised.value is failure
     assert checkpoints == 3
     assert close_calls == 1
-    assert subtitle.exists() is False
-    assert FakeDownloader.instances[0].close_calls == 1
+    instance = FakeDownloader.instances[0]
+    assert _subtitle_output_root(instance).exists() is False
+    assert instance.close_calls == 1
 
 
 def test_subtitle_os_read_failure_remains_a_closed_contract_error(
@@ -677,14 +794,7 @@ def test_subtitle_os_read_failure_remains_a_closed_contract_error(
 ) -> None:
     _install_fake_backend(monkeypatch, tmp_path)
     monkeypatch.chdir(tmp_path)
-    subtitle = tmp_path / f"{VIDEO_ID}.en.vtt"
-    subtitle.write_text("WEBVTT\n", encoding="utf-8")
-    FakeDownloader.response = {
-        **_video(),
-        "requested_subtitles": {"en": {"ext": "vtt", "filepath": str(subtitle)}},
-        "subtitles": {"en": [{"ext": "vtt"}]},
-        "automatic_captions": {},
-    }
+    FakeDownloader.response = _subtitle_backend_response
 
     def fail_read(_descriptor: int, _length: int) -> bytes:
         raise OSError("private read detail")
@@ -696,8 +806,9 @@ def test_subtitle_os_read_failure_remains_a_closed_contract_error(
     assert isinstance(result, ExecutionFailureV1)
     assert result.error_code == "backend_contract_violation"
     assert "private" not in repr(result)
-    assert subtitle.exists() is False
-    assert FakeDownloader.instances[0].close_calls == 1
+    instance = FakeDownloader.instances[0]
+    assert _subtitle_output_root(instance).exists() is False
+    assert instance.close_calls == 1
 
 
 def test_read_video_uses_exact_backend_call_and_closed_options(

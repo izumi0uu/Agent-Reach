@@ -13,6 +13,7 @@ from .contracts import (
     _MAX_EXA_OUTPUT_BYTES,
     _MAX_YOUTUBE_AUTHOR_CHARACTERS,
     _MAX_YOUTUBE_OUTPUT_BYTES,
+    _YOUTUBE_SUBTITLE_MARKER,
     FETCHED_DOCUMENT_CAPABILITY,
     MAX_AUTHOR_CHARACTERS,
     MAX_CONTENT_LOCATION_CHARACTERS,
@@ -283,6 +284,11 @@ def execute(
         return _failure(request, "host_capability_missing")
     if not _valid_host_capabilities(capability, host_capabilities):
         return _failure(request, "invalid_request")
+    if (request.source, request.operation) == (
+        "youtube",
+        "read.subtitles",
+    ) and context.limits.maximum_text_characters < len(_YOUTUBE_SUBTITLE_MARKER):
+        return _failure(request, "invalid_input")
 
     context.checkpoint()
 

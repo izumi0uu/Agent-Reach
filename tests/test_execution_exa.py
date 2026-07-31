@@ -925,6 +925,51 @@ def test_process_group_cleanup_falls_back_to_direct_kill(
     assert process.waits == 1
 
 
+@pytest.mark.parametrize("missing_attribute", ["killpg", "SIGKILL"])
+def test_process_cleanup_uses_direct_kill_when_group_kill_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    missing_attribute: str,
+) -> None:
+    events: list[tuple[object, ...]] = []
+    group_calls: list[tuple[int, object]] = []
+
+    class Process:
+        pid = 424242
+        returncode: int | None = None
+
+        def poll(self) -> int | None:
+            events.append(("poll",))
+            return self.returncode
+
+        def kill(self) -> None:
+            events.append(("kill",))
+            self.returncode = -9
+
+        def wait(self, *, timeout: float) -> int:
+            events.append(("wait", timeout))
+            assert self.returncode is not None
+            return self.returncode
+
+    def killpg(pid: int, requested_signal: object) -> None:
+        group_calls.append((pid, requested_signal))
+
+    monkeypatch.setattr(exa.os, "killpg", killpg, raising=False)
+    monkeypatch.setattr(exa.signal, "SIGKILL", object(), raising=False)
+    if missing_attribute == "killpg":
+        monkeypatch.delattr(exa.os, "killpg", raising=False)
+    else:
+        monkeypatch.delattr(exa.signal, "SIGKILL", raising=False)
+
+    exa._kill_and_reap(cast(subprocess.Popen[bytes], Process()))
+
+    assert group_calls == []
+    assert events == [
+        ("poll",),
+        ("kill",),
+        ("wait", exa._CLEANUP_WAIT_SECONDS),
+    ]
+
+
 def test_search_code_has_no_executable_route(
     artifact_fixture: _ArtifactFixture,
     monkeypatch: pytest.MonkeyPatch,
