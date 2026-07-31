@@ -57,14 +57,166 @@ jobs:
           dupes = [n for n, c in collections.Counter(names).items() if c > 1]
           assert not dupes, f"duplicate entries in wheel: {dupes}"
           assert "agent_reach/skill/SKILL.md" in names, "SKILL.md missing from wheel"
+          assert "agent_reach/execution/v1/youtube.py" in names, "YouTube execution missing from wheel"
           for prefix in ("agent_reach/guides/", "agent_reach/scripts/", "agent_reach/skill/references/"):
               assert any(n.startswith(prefix) for n in names), f"{prefix} missing from wheel"
           print(f"wheel OK: {len(names)} entries, no duplicates, data files present")
           PY
 
-      - name: Smoke-install wheel into clean venv
+      - name: Smoke-install wheel and closed YouTube execution into clean venv
         run: |
           python -m venv /tmp/smoke
-          /tmp/smoke/bin/pip install --quiet dist/*.whl
+          /tmp/smoke/bin/pip install --quiet \
+            "yt-dlp==2026.7.4" \
+            "yt-dlp-ejs==0.8.0" \
+            "deno==2.8.3" \
+            dist/*.whl
           /tmp/smoke/bin/agent-reach version
-          cd /tmp && /tmp/smoke/bin/python -c "import agent_reach; from importlib.resources import files; assert (files('agent_reach')/'skill'/'SKILL.md').is_file(); print('SKILL.md ships in site-packages OK')"
+          cd /tmp
+          /tmp/smoke/bin/python - <<'PY'
+          import os
+          import socket
+          import sys
+          from importlib.metadata import version
+          from importlib.resources import files
+          from inspect import signature
+          from pathlib import Path
+          from types import SimpleNamespace
+
+          import agent_reach
+          from agent_reach.execution.v1 import (
+              PROTOCOL_VERSION,
+              ExecutionContextV1,
+              ExecutionLimitsV1,
+              ExecutionRequestV1,
+              ExecutionSuccessV1,
+              NetworkAccessV1,
+              execute,
+              list_capabilities,
+          )
+
+          assert (files("agent_reach") / "skill" / "SKILL.md").is_file()
+          assert "agent_reach.execution.v1.youtube" not in sys.modules
+          assert "deno" not in sys.modules
+          capabilities = list_capabilities()
+          assert tuple((item.source, item.operation) for item in capabilities) == (
+              ("rss", "read.feed"),
+              ("rss", "browse.entries"),
+              ("bilibili", "search.videos"),
+              ("bilibili", "read.video"),
+              ("bilibili", "browse.hot"),
+              ("bilibili", "browse.rank"),
+              ("youtube", "read.video"),
+          )
+          assert "agent_reach.execution.v1.youtube" not in sys.modules
+
+          import agent_reach.execution.v1.youtube as youtube_execution
+
+          package_file = Path(agent_reach.__file__).resolve()
+          youtube_file = Path(youtube_execution.__file__).resolve()
+          assert package_file.is_relative_to(Path(sys.prefix).resolve())
+          assert youtube_file == package_file.parent / "execution" / "v1" / "youtube.py"
+          assert youtube_execution.execute_youtube.__module__ == (
+              "agent_reach.execution.v1.youtube"
+          )
+          assert str(signature(youtube_execution.execute_youtube)) == (
+              "(request: 'ExecutionRequestV1', context: 'ExecutionContextV1') "
+              "-> 'ExecutionResultV1'"
+          )
+
+          expected_versions = {
+              "yt-dlp": "2026.7.4",
+              "yt-dlp-ejs": "0.8.0",
+              "deno": "2.8.3",
+          }
+          assert {name: version(name) for name in expected_versions} == expected_versions
+          deno = Path(sys.executable).parent / "deno"
+
+          plugin_dirs = SimpleNamespace(value=["ambient"])
+
+          class FakeYoutubeDL:
+              instances = []
+
+              def __init__(self, params):
+                  self.params = params
+                  self.calls = []
+                  self.closed = False
+                  self.instances.append(self)
+
+              def extract_info(self, target, *, download, ie_key):
+                  self.calls.append((target, download, ie_key))
+                  return {
+                      "id": "dQw4w9WgXcQ",
+                      "title": " Video   title ",
+                      "description": " Description\nbody ",
+                      "uploader": " Channel\tname ",
+                      "duration": 213,
+                      "view_count": 42,
+                      "comment_count": 7,
+                      "upload_date": "20091025",
+                  }
+
+              def close(self):
+                  self.closed = True
+
+          def fake_import_module(name):
+              if name == "yt_dlp":
+                  return SimpleNamespace(YoutubeDL=FakeYoutubeDL)
+              if name == "yt_dlp_ejs":
+                  return SimpleNamespace(version="0.8.0")
+              if name == "yt_dlp.globals":
+                  return SimpleNamespace(plugin_dirs=plugin_dirs)
+              raise AssertionError(f"unexpected backend import: {name}")
+
+          def deny_network(*_args, **_kwargs):
+              raise AssertionError("installed-wheel smoke attempted network access")
+
+          youtube_execution.import_module = fake_import_module
+          socket.socket = deny_network
+          socket.create_connection = deny_network
+
+          video_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+          result = execute(
+              ExecutionRequestV1(
+                  PROTOCOL_VERSION,
+                  "youtube",
+                  "read.video",
+                  {"url": video_url},
+              ),
+              ExecutionContextV1(
+                  (NetworkAccessV1(),),
+                  limits=ExecutionLimitsV1(
+                      maximum_items=1,
+                      maximum_text_characters=16_000,
+                  ),
+              ),
+          )
+
+          assert isinstance(result, ExecutionSuccessV1)
+          assert len(result.items) == 1
+          assert result.items[0].schema_id == "youtube.video.v1"
+          assert result.items[0].fields == {
+              "text": "Description body",
+              "native_id": "dQw4w9WgXcQ",
+              "title": "Video title",
+              "url": video_url,
+              "author": "Channel name",
+              "published_at": "2009-10-25",
+              "duration_seconds": 213,
+              "view_count": 42,
+              "comment_count": 7,
+          }
+          assert len(FakeYoutubeDL.instances) == 1
+          downloader = FakeYoutubeDL.instances[0]
+          assert downloader.calls == [(video_url, False, "Youtube")]
+          assert downloader.closed is True
+          assert downloader.params["js_runtimes"] == {"deno": {"path": str(deno)}}
+          assert downloader.params["proxy"] == ""
+          assert downloader.params["cookiefile"] is None
+          assert downloader.params["cookiesfrombrowser"] is None
+          assert downloader.params["usenetrc"] is False
+          assert downloader.params["remote_components"] == []
+          assert plugin_dirs.value == []
+          assert os.environ["YTDLP_NO_PLUGINS"] == "1"
+          print("installed wheel exposes 7 descriptors and closed YouTube execution OK")
+          PY

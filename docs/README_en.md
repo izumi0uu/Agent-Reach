@@ -233,6 +233,19 @@ It sits one level above any specific implementation — it handles **selection, 
 
 Every time you spin up a new Agent, you spend time finding tools, installing deps, and debugging configs — what reads Twitter? How do you log into Reddit? What replaces a discontinued XiaoHongShu CLI? Every time, you re-do the same work. Agent Reach does one simple thing: **the most reliable access path for each platform, chosen, installed, and health-checked for you. Access paths come and go (in March 2026 a batch of single-platform CLIs went unmaintained — we re-routed), so you don't have to care.**
 
+### Structured execution API for host integrations
+
+`agent_reach.execution.v1` exposes seven closed operations: two RSS
+operations, four Bilibili operations, and YouTube `read.video`. The YouTube
+operation accepts only a canonical watch URL plus a data-free network approval,
+then invokes exact `yt-dlp==2026.7.4` with `yt-dlp-ejs==0.8.0` and the
+adjacent `deno==2.8.3`. It cannot select commands, argv, endpoints, proxies,
+Cookies, credentials, browsers, output paths, plugins, remote components, or
+fallbacks, and it never downloads the video. The embedding host still owns
+authorization, private process state, hard cancellation, bounded framing,
+independent result validation, and audit. See the
+[execution v1 guide](execution-v1.md).
+
 ### 🔌 Every platform = an ordered backend list (primary + fallbacks)
 
 Switching access paths means reordering the list, not rewriting code. `agent-reach doctor` tells you **which backend each platform is currently using**.

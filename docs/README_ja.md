@@ -193,6 +193,18 @@ Agent Reach はシンプルなことを1つだけ行います：**ツールの�
 
 インストール後、エージェントは上流ツール（twitter-cli、rdt-cli、xhs-cli、yt-dlp、mcporter、gh CLI等）を直接呼び出します — 間にラッパーレイヤーはありません。
 
+### ホスト統合向け構造化実行 API
+
+`agent_reach.execution.v1` は、RSS 2件、Bilibili 4件、YouTube
+`read.video` 1件の合計7件の閉じた操作を提供します。YouTube 操作は正規の
+watch URL とデータを持たないネットワーク承認だけを受け取り、
+`yt-dlp==2026.7.4`、`yt-dlp-ejs==0.8.0`、Python の隣にある
+`deno==2.8.3` を固定して呼び出します。コマンド、argv、endpoint、proxy、
+Cookie、資格情報、browser、出力先、plugin、remote component、fallback は
+選択できず、動画もダウンロードしません。認可、非公開のプロセス状態、強制
+キャンセル、有界 framing、独立した結果検証、監査は統合ホストが担当します。
+詳細は [execution v1 guide](execution-v1.md) を参照してください。
+
 ### 🔌 すべてのチャンネルはプラグ可能
 
 各プラットフォームは上流ツールに対応しています。**気に入らなければ差し替えるだけ。**

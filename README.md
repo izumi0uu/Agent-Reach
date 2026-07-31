@@ -181,11 +181,13 @@ AI Agent 已经能帮你写代码、改文档、管项目——但你让它去�
 `agent_reach.execution.v1` 提供一个附加的、封闭的 Python 执行合同，供需要
 自行负责授权、网络/进程隔离和审计的宿主集成。当前切片包含 RSS 的
 `read.feed`、`browse.entries`，以及 Bilibili 的 `search.videos`、
-`read.video`、`browse.hot`、`browse.rank`。RSS 只接受宿主已经安全获取的
-有界字节；Bilibili 只接受无数据的显式网络授权标记，并固定调用宿主安装的
-`bilibili-cli==0.6.2`。该标记不提供 OS 隔离，HOME、代理、凭据、超时和进程
-清理由宿主负责。合同不会开放命令、argv、Cookie、凭据、endpoint 或 backend
-选择。完整合同与 fork 跟随上游的 rebase 规则见
+`read.video`、`browse.hot`、`browse.rank`，以及 YouTube 的
+`read.video`。RSS 只接受宿主已经安全获取的有界字节；Bilibili 和 YouTube
+只接受无数据的显式网络授权标记，并分别固定调用 `bilibili-cli==0.6.2` 与
+`yt-dlp==2026.7.4`（配套 `yt-dlp-ejs==0.8.0`、相邻
+`deno==2.8.3`）。该标记不提供 OS 隔离，HOME、代理、凭据、超时和进程清理
+由宿主负责。合同不会开放命令、argv、Cookie、凭据、endpoint 或 backend
+选择，也不会下载视频。完整合同与 fork 跟随上游的 rebase 规则见
 [execution v1 guide](docs/execution-v1.md)。
 
 ### 🔌 每个平台 = 首选 + 备选的有序后端列表

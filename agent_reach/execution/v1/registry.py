@@ -9,6 +9,8 @@ from .contracts import (
     _MAX_BILIBILI_AUTHOR_CHARACTERS,
     _MAX_BILIBILI_OUTPUT_BYTES,
     _MAX_BILIBILI_QUERY_CHARACTERS,
+    _MAX_YOUTUBE_AUTHOR_CHARACTERS,
+    _MAX_YOUTUBE_OUTPUT_BYTES,
     FETCHED_DOCUMENT_CAPABILITY,
     MAX_AUTHOR_CHARACTERS,
     MAX_CONTENT_LOCATION_CHARACTERS,
@@ -32,6 +34,7 @@ from .contracts import (
     NetworkAccessV1,
     OperationCapabilityV1,
     _valid_bilibili_video_url,
+    _valid_youtube_video_url,
 )
 
 
@@ -141,6 +144,18 @@ _CAPABILITIES: Final = (
         maximum_output_bytes=_MAX_BILIBILI_OUTPUT_BYTES,
         maximum_author_characters=_MAX_BILIBILI_AUTHOR_CHARACTERS,
     ),
+    _capability(
+        source="youtube",
+        operation="read.video",
+        argument_schema_id="youtube.read.video.arguments.v1",
+        result_schema_ids=("youtube.video.v1",),
+        backend_id="yt-dlp",
+        backend_version="2026.7.4",
+        required_host_capability=NETWORK_ACCESS_CAPABILITY,
+        maximum_items=1,
+        maximum_output_bytes=_MAX_YOUTUBE_OUTPUT_BYTES,
+        maximum_author_characters=_MAX_YOUTUBE_AUTHOR_CHARACTERS,
+    ),
 )
 _CAPABILITY_BY_OPERATION: Final = MappingProxyType(
     {(capability.source, capability.operation): capability for capability in _CAPABILITIES}
@@ -195,6 +210,10 @@ def execute(
         from .bilibili import execute_bilibili
 
         return execute_bilibili(request, context)
+    if request.source == "youtube":
+        from .youtube import execute_youtube
+
+        return execute_youtube(request, context)
     return _failure(request, "unsupported_source")
 
 
@@ -235,6 +254,8 @@ def _valid_arguments(
         )
     if key == ("bilibili", "read.video") and set(arguments) == {"url"}:
         return _valid_bilibili_video_url(arguments["url"])
+    if key == ("youtube", "read.video") and set(arguments) == {"url"}:
+        return _valid_youtube_video_url(arguments["url"])
     if key in {("bilibili", "browse.hot"), ("bilibili", "browse.rank")} and set(arguments) == {
         "limit"
     }:
