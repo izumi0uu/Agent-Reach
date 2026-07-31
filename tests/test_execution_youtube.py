@@ -683,11 +683,19 @@ def test_adjacent_deno_gate_rejects_unexpected_shapes(
         deno.write_bytes(b"deno")
         deno.chmod(0o600)
 
+    import_calls: list[str] = []
+
+    def record_import(name: str) -> object:
+        import_calls.append(name)
+        raise AssertionError(f"unexpected backend import: {name}")
+
     monkeypatch.setattr(youtube_execution, "version", lambda name: VERSIONS[name])
+    monkeypatch.setattr(youtube_execution, "import_module", record_import)
     code, _ = youtube_execution._load_backend(executable=str(executable))
 
     expected = "backend_unavailable" if kind == "missing" else "backend_incompatible"
     assert code == expected
+    assert import_calls == []
 
 
 @pytest.mark.parametrize(
@@ -759,6 +767,49 @@ def test_yt_dlp_exc_info_wrapper_is_classified_from_nested_error(
 
     assert isinstance(result, ExecutionFailureV1)
     assert result.error_code == "transient"
+    assert "private" not in repr(result)
+
+
+def test_explicit_http_cause_precedes_unrelated_os_error_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    http_error_type = type("HTTPError", (Exception,), {})
+    http_error = http_error_type("cause Cookie=private")
+    http_error.status = 404  # type: ignore[attr-defined]
+    try:
+        raise OSError("context /Users/private?token=secret")
+    except OSError:
+        try:
+            raise RuntimeError("wrapper private") from http_error
+        except RuntimeError as error:
+            FakeDownloader.raised = error
+
+    result = execute(_request(), _context())
+
+    assert isinstance(result, ExecutionFailureV1)
+    assert result.error_code == "not_found"
+    assert "private" not in repr(result)
+
+
+def test_exc_info_http_error_precedes_unrelated_os_error_context(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_fake_backend(monkeypatch, tmp_path)
+    http_error_type = type("HTTPError", (Exception,), {})
+    http_error = http_error_type("exc_info Cookie=private")
+    http_error.status = 404  # type: ignore[attr-defined]
+    wrapper = RuntimeError("wrapper private")
+    wrapper.exc_info = (http_error_type, http_error, None)  # type: ignore[attr-defined]
+    wrapper.__context__ = OSError("context /Users/private?token=secret")
+    FakeDownloader.raised = wrapper
+
+    result = execute(_request(), _context())
+
+    assert isinstance(result, ExecutionFailureV1)
+    assert result.error_code == "not_found"
     assert "private" not in repr(result)
 
 

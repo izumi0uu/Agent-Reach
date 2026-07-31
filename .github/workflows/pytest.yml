@@ -98,6 +98,16 @@ jobs:
           assert (files("agent_reach") / "skill" / "SKILL.md").is_file()
           assert "agent_reach.execution.v1.youtube" not in sys.modules
           assert "deno" not in sys.modules
+
+          def loaded_backend_modules():
+              return tuple(
+                  name
+                  for name in sys.modules
+                  if name in {"yt_dlp", "yt_dlp_ejs"}
+                  or name.startswith(("yt_dlp.", "yt_dlp_ejs."))
+              )
+
+          assert loaded_backend_modules() == ()
           capabilities = list_capabilities()
           assert tuple((item.source, item.operation) for item in capabilities) == (
               ("rss", "read.feed"),
@@ -109,6 +119,7 @@ jobs:
               ("youtube", "read.video"),
           )
           assert "agent_reach.execution.v1.youtube" not in sys.modules
+          assert loaded_backend_modules() == ()
 
           import agent_reach.execution.v1.youtube as youtube_execution
 
