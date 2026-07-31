@@ -57,13 +57,22 @@ jobs:
           dupes = [n for n, c in collections.Counter(names).items() if c > 1]
           assert not dupes, f"duplicate entries in wheel: {dupes}"
           assert "agent_reach/skill/SKILL.md" in names, "SKILL.md missing from wheel"
-          assert "agent_reach/execution/v1/youtube.py" in names, "YouTube execution missing from wheel"
+          required_execution_files = (
+              "agent_reach/execution/v1/contracts.py",
+              "agent_reach/execution/v1/registry.py",
+              "agent_reach/execution/v1/youtube.py",
+              "agent_reach/execution/v1/v2ex.py",
+              "agent_reach/execution/v1/_v2ex_transport.py",
+              "agent_reach/execution/v1/exa.py",
+          )
+          for name in required_execution_files:
+              assert name in names, f"{name} missing from wheel"
           for prefix in ("agent_reach/guides/", "agent_reach/scripts/", "agent_reach/skill/references/"):
               assert any(n.startswith(prefix) for n in names), f"{prefix} missing from wheel"
           print(f"wheel OK: {len(names)} entries, no duplicates, data files present")
           PY
 
-      - name: Smoke-install wheel and closed YouTube execution into clean venv
+      - name: Smoke-install wheel and closed execution runtimes into clean venv
         run: |
           python -m venv /tmp/smoke
           /tmp/smoke/bin/pip install --quiet \
@@ -84,20 +93,40 @@ jobs:
           from types import SimpleNamespace
 
           import agent_reach
+          import agent_reach.execution.v1 as execution_v1
           from agent_reach.execution.v1 import (
+              MCPORTER_ARTIFACTS_CAPABILITY,
+              NETWORK_ACCESS_CAPABILITY,
+              PRIVATE_WORKSPACE_CAPABILITY,
               PROTOCOL_VERSION,
               ExecutionContextV1,
               ExecutionLimitsV1,
               ExecutionRequestV1,
               ExecutionSuccessV1,
+              McporterArtifactsV1,
               NetworkAccessV1,
+              PrivateWorkspaceV1,
               execute,
               list_capabilities,
           )
 
           assert (files("agent_reach") / "skill" / "SKILL.md").is_file()
-          assert "agent_reach.execution.v1.youtube" not in sys.modules
+          runtime_modules = {
+              "agent_reach.execution.v1.youtube",
+              "agent_reach.execution.v1.v2ex",
+              "agent_reach.execution.v1._v2ex_transport",
+              "agent_reach.execution.v1.exa",
+          }
+          assert runtime_modules.isdisjoint(sys.modules)
           assert "deno" not in sys.modules
+          assert {
+              "MCPORTER_ARTIFACTS_CAPABILITY",
+              "PRIVATE_WORKSPACE_CAPABILITY",
+              "McporterArtifactsV1",
+              "PrivateWorkspaceV1",
+          } <= set(execution_v1.__all__)
+          assert execution_v1.McporterArtifactsV1 is McporterArtifactsV1
+          assert execution_v1.PrivateWorkspaceV1 is PrivateWorkspaceV1
 
           def loaded_backend_modules():
               return tuple(
@@ -105,6 +134,8 @@ jobs:
                   for name in sys.modules
                   if name in {"yt_dlp", "yt_dlp_ejs"}
                   or name.startswith(("yt_dlp.", "yt_dlp_ejs."))
+                  or name == "httpcore"
+                  or name.startswith("httpcore.")
               )
 
           assert loaded_backend_modules() == ()
@@ -117,23 +148,115 @@ jobs:
               ("bilibili", "browse.hot"),
               ("bilibili", "browse.rank"),
               ("youtube", "read.video"),
+              ("youtube", "search.videos"),
+              ("youtube", "read.subtitles"),
+              ("v2ex", "browse.hot"),
+              ("v2ex", "browse.node_topics"),
+              ("v2ex", "read.topic"),
+              ("v2ex", "read.user"),
+              ("exa", "search.web"),
           )
-          assert "agent_reach.execution.v1.youtube" not in sys.modules
+          expected_new_capabilities = {
+              ("youtube", "search.videos"): (
+                  "youtube.search.videos.arguments.v1",
+                  ("youtube.video.v1",),
+                  "yt-dlp",
+                  "2026.7.4",
+                  (NETWORK_ACCESS_CAPABILITY,),
+                  50,
+              ),
+              ("youtube", "read.subtitles"): (
+                  "youtube.read.subtitles.arguments.v1",
+                  ("youtube.subtitle.v1",),
+                  "yt-dlp",
+                  "2026.7.4",
+                  (NETWORK_ACCESS_CAPABILITY, PRIVATE_WORKSPACE_CAPABILITY),
+                  1,
+              ),
+              ("v2ex", "browse.hot"): (
+                  "v2ex.browse.hot.arguments.v1",
+                  ("v2ex.topic.v1",),
+                  "v2ex-public-api",
+                  "legacy-json-2026-07-31",
+                  (NETWORK_ACCESS_CAPABILITY,),
+                  50,
+              ),
+              ("v2ex", "browse.node_topics"): (
+                  "v2ex.browse.node_topics.arguments.v1",
+                  ("v2ex.topic.v1",),
+                  "v2ex-public-api",
+                  "legacy-json-2026-07-31",
+                  (NETWORK_ACCESS_CAPABILITY,),
+                  50,
+              ),
+              ("v2ex", "read.topic"): (
+                  "v2ex.read.topic.arguments.v1",
+                  ("v2ex.topic.v1", "v2ex.reply.v1"),
+                  "v2ex-public-api",
+                  "legacy-json-2026-07-31",
+                  (NETWORK_ACCESS_CAPABILITY,),
+                  21,
+              ),
+              ("v2ex", "read.user"): (
+                  "v2ex.read.user.arguments.v1",
+                  ("v2ex.profile.v1",),
+                  "v2ex-public-api",
+                  "legacy-json-2026-07-31",
+                  (NETWORK_ACCESS_CAPABILITY,),
+                  1,
+              ),
+              ("exa", "search.web"): (
+                  "exa.search.web.arguments.v1",
+                  ("exa.search.result.v1",),
+                  "exa-mcporter",
+                  "0.12.3+exa-web.v1",
+                  (NETWORK_ACCESS_CAPABILITY, MCPORTER_ARTIFACTS_CAPABILITY),
+                  20,
+              ),
+          }
+          capability_by_operation = {
+              (item.source, item.operation): item for item in capabilities
+          }
+          for operation, expected in expected_new_capabilities.items():
+              item = capability_by_operation[operation]
+              assert (
+                  item.argument_schema_id,
+                  item.result_schema_ids,
+                  item.backend_id,
+                  item.backend_version,
+                  item.required_host_capabilities,
+                  item.maximum_items,
+              ) == expected
+          assert runtime_modules.isdisjoint(sys.modules)
           assert loaded_backend_modules() == ()
 
+          import agent_reach.execution.v1._v2ex_transport as v2ex_transport
+          import agent_reach.execution.v1.exa as exa_execution
+          import agent_reach.execution.v1.v2ex as v2ex_execution
           import agent_reach.execution.v1.youtube as youtube_execution
 
           package_file = Path(agent_reach.__file__).resolve()
-          youtube_file = Path(youtube_execution.__file__).resolve()
           assert package_file.is_relative_to(Path(sys.prefix).resolve())
-          assert youtube_file == package_file.parent / "execution" / "v1" / "youtube.py"
-          assert youtube_execution.execute_youtube.__module__ == (
-              "agent_reach.execution.v1.youtube"
-          )
-          assert str(signature(youtube_execution.execute_youtube)) == (
+          expected_runtime_files = {
+              youtube_execution: "youtube.py",
+              v2ex_execution: "v2ex.py",
+              v2ex_transport: "_v2ex_transport.py",
+              exa_execution: "exa.py",
+          }
+          for module, name in expected_runtime_files.items():
+              assert Path(module.__file__).resolve() == package_file.parent / "execution" / "v1" / name
+          expected_signature = (
               "(request: 'ExecutionRequestV1', context: 'ExecutionContextV1') "
               "-> 'ExecutionResultV1'"
           )
+          for function, module_name in (
+              (youtube_execution.execute_youtube, "agent_reach.execution.v1.youtube"),
+              (v2ex_execution.execute_v2ex, "agent_reach.execution.v1.v2ex"),
+              (exa_execution.execute_exa, "agent_reach.execution.v1.exa"),
+          ):
+              assert function.__module__ == module_name
+              assert str(signature(function)) == expected_signature
+          assert loaded_backend_modules() == ()
 
           expected_versions = {
               "yt-dlp": "2026.7.4",
@@ -229,5 +352,5 @@ jobs:
           assert downloader.params["remote_components"] == []
           assert plugin_dirs.value == []
           assert os.environ["YTDLP_NO_PLUGINS"] == "1"
-          print("installed wheel exposes 7 descriptors and closed YouTube execution OK")
+          print("installed wheel exposes 14 descriptors and closed execution runtimes OK")
           PY

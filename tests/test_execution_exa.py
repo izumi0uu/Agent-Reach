@@ -6,7 +6,9 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import signal
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass, replace
@@ -125,11 +127,28 @@ def artifact_fixture(tmp_path: Path) -> _ArtifactFixture:
     )
     config = base / "sterile-config.json"
     config.write_bytes(STERILE_CONFIG)
+    node = base / "node"
+    source_executable = Path(sys.executable).resolve(strict=True)
+    shutil.copyfile(source_executable, node)
+    node.chmod(0o755)
+    base_executable = Path(getattr(sys, "_base_executable", sys.executable)).resolve(strict=True)
+    (base / "pyvenv.cfg").write_text(
+        "\n".join(
+            (
+                f"home = {base_executable.parent}",
+                "include-system-site-packages = false",
+                f"version = {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+                f"executable = {base_executable}",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
     return _ArtifactFixture(
         root=root,
         cli=cli,
         config=config,
-        node=Path(sys.executable).resolve(strict=True),
+        node=node,
     )
 
 
@@ -176,6 +195,20 @@ def _assert_failure(
         assert result.backend_version is None
     assert QUERY_CANARY not in repr(result)
     return result
+
+
+def test_artifact_fixture_uses_a_safe_independent_node_copy(
+    artifact_fixture: _ArtifactFixture,
+) -> None:
+    source = Path(sys.executable).resolve(strict=True)
+    details = artifact_fixture.node.lstat()
+
+    assert artifact_fixture.node != source
+    assert stat.S_ISREG(details.st_mode)
+    assert details.st_nlink == 1
+    assert stat.S_IMODE(details.st_mode) == 0o755
+    assert artifact_fixture.node.read_bytes() == source.read_bytes()
+    artifact_fixture.capability()
 
 
 def _write_cli(fixture: _ArtifactFixture, body: str) -> McporterArtifactsV1:
