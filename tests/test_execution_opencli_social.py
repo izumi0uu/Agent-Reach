@@ -150,13 +150,13 @@ def test_final_opencli_owner_fork_provenance_and_install_layout_are_frozen() -> 
     assert opencli._PACKAGE_ROOT == Path("node_modules/@jackwener/opencli")
     assert opencli._PACKAGE_CLI == Path("node_modules/@jackwener/opencli/dist/src/main.js")
     assert opencli._OPENCLI_OFFICIAL_BASE_COMMIT == ("399c0de2a76eb979aee3a3836cf2d24fd247780f")
-    assert opencli._OPENCLI_SOURCE_COMMIT == "9b0ec22faeff186d53836c14f39cbf5cdddfca55"
-    assert opencli._OPENCLI_SOURCE_TREE == "fc3e59294a5b06e7e236fb21c8c4a80b7749ed50"
+    assert opencli._OPENCLI_SOURCE_COMMIT == "594b21498680f6372279f178aa9b3aaed2c71e35"
+    assert opencli._OPENCLI_SOURCE_TREE == "be64296855727d00478cc857f2b26eb7d3790057"
     assert opencli._OPENCLI_TARBALL_SHA256 == (
-        "eebe99d2e848927edaa8b10d6edbfaec088a9b4bdd06436be7556601fb1be2a4"
+        "dac98c69802621d55d8e3a5ae7032f47ab22b3785331a69499a907456f9dfb73"
     )
     assert opencli._OPENCLI_TARBALL_SHA512 == (
-        "hhVlYQ9LUtxoP1Y7IfnZxTjOxfGf0IbdJrHYpBmtxfwophmlAJ7xXPFYax+FFL5ZmBCfSppPfZ061aL1Cb2shg=="
+        "kiYpXZ4jrwr6q6yVHCclL0wv3alO0JN1+GOjeY9S9q+73EKkZ3ZQE0nIiE7WoK5MC1ttK918PkOhYO3uKQPgyQ=="
     )
 
 
