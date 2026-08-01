@@ -206,7 +206,7 @@ The reviewed package is built from official base
 `594b21498680f6372279f178aa9b3aaed2c71e35`, and Git tree
 `be64296855727d00478cc857f2b26eb7d3790057`. Its tarball SHA-256 is
 `dac98c69802621d55d8e3a5ae7032f47ab22b3785331a69499a907456f9dfb73`
-and SHA-512 is
+and npm shasum is `69e0f4a72f546b4afe8ae93aa41540092f81fc81`. Its SHA-512 is
 `kiYpXZ4jrwr6q6yVHCclL0wv3alO0JN1+GOjeY9S9q+73EKkZ3ZQE0nIiE7WoK5MC1ttK918PkOhYO3uKQPgyQ==`.
 The Git tree identifies reviewed source; it is not the 64-character installed
 prefix digest carried by `OpenCliSessionV1`.

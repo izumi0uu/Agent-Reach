@@ -318,6 +318,9 @@ jobs:
           assert opencli_execution._OPENCLI_TARBALL_SHA256 == (
               "dac98c69802621d55d8e3a5ae7032f47ab22b3785331a69499a907456f9dfb73"
           )
+          assert opencli_execution._OPENCLI_TARBALL_SHA512 == (
+              "kiYpXZ4jrwr6q6yVHCclL0wv3alO0JN1+GOjeY9S9q+73EKkZ3ZQE0nIiE7WoK5MC1ttK918PkOhYO3uKQPgyQ=="
+          )
           expected_signature = (
               "(request: 'ExecutionRequestV1', context: 'ExecutionContextV1') "
               "-> 'ExecutionResultV1'"
