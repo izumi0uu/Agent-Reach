@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -15,6 +14,8 @@ from .contracts import (
     _MAX_OPENCLI_OUTPUT_BYTES,
     _MAX_YOUTUBE_AUTHOR_CHARACTERS,
     _MAX_YOUTUBE_OUTPUT_BYTES,
+    _SOCIAL_USERNAME,
+    _SUBREDDIT_IDENTIFIER,
     _YOUTUBE_SUBTITLE_MARKER,
     FETCHED_DOCUMENT_CAPABILITY,
     MAX_AUTHOR_CHARACTERS,
@@ -49,10 +50,6 @@ from .contracts import (
     _valid_bilibili_video_url,
     _valid_youtube_video_url,
 )
-
-_SOCIAL_IDENTIFIER: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
-_SUBREDDIT_IDENTIFIER: Final = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,20}")
-_REDDIT_POST_ID: Final = re.compile(r"[a-z0-9]{1,32}")
 
 
 def _capability(
@@ -628,7 +625,7 @@ def _valid_subreddit(value: object) -> bool:
 
 
 def _valid_social_identifier(value: object) -> bool:
-    return bool(type(value) is str and value.isascii() and _SOCIAL_IDENTIFIER.fullmatch(value))
+    return bool(type(value) is str and value.isascii() and _SOCIAL_USERNAME.fullmatch(value))
 
 
 def _valid_host_capabilities(

@@ -61,13 +61,16 @@ const nativeFetch = globalThis.fetch;
 if (typeof nativeFetch !== "function") {
   throw new Error("OpenCLI fetch contract is incompatible");
 }
+const DAEMON_PORT = "19825";
+const DAEMON_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 const guardFetch = (delegate) => (input, init) => {
   const target = new URL(input instanceof Request ? input.url : String(input));
   const method = String(
     init?.method ?? (input instanceof Request ? input.method : "GET"),
   ).toUpperCase();
   if (
-    target.origin === "http://127.0.0.1:19825" &&
+    target.port === DAEMON_PORT &&
+    DAEMON_HOSTS.has(target.hostname.toLowerCase()) &&
     target.pathname === "/shutdown" &&
     method === "POST"
   ) {

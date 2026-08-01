@@ -614,7 +614,7 @@ def test_opencli_session_capability_is_closed_and_immutable(tmp_path: Path) -> N
     assert ExecutionContextV1((session,)).host_capabilities == (session,)
     with pytest.raises(ValueError):
         OpenCliSessionV1(
-            node_executable="node",
+            node_executable=str(tmp_path / "node"),
             node_sha256="a" * 64,
             opencli_root=str(tmp_path / "opencli"),
             opencli_cli=str(tmp_path / "outside.js"),

@@ -303,8 +303,12 @@ jobs:
           opencli_guard = Path(opencli_execution.__file__).with_name(
               "_opencli_no_lifecycle.mjs"
           )
+          reviewed_opencli_guard_sha256 = (
+              "9c9cd9bf8163fb3fba863f94a71e9ea09ea3323b84f89a06b55e3d1f19515213"
+          )
+          assert opencli_execution._LIFECYCLE_GUARD_SHA256 == reviewed_opencli_guard_sha256
           assert hashlib.sha256(opencli_guard.read_bytes()).hexdigest() == (
-              opencli_execution._LIFECYCLE_GUARD_SHA256
+              reviewed_opencli_guard_sha256
           )
           assert opencli_execution._OPENCLI_OFFICIAL_BASE_COMMIT == (
               "399c0de2a76eb979aee3a3836cf2d24fd247780f"
