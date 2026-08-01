@@ -64,6 +64,8 @@ jobs:
               "agent_reach/execution/v1/v2ex.py",
               "agent_reach/execution/v1/_v2ex_transport.py",
               "agent_reach/execution/v1/exa.py",
+              "agent_reach/execution/v1/opencli_social.py",
+              "agent_reach/execution/v1/_opencli_no_lifecycle.mjs",
           )
           for name in required_execution_files:
               assert name in names, f"{name} missing from wheel"
@@ -83,6 +85,7 @@ jobs:
           /tmp/smoke/bin/agent-reach version
           cd /tmp
           /tmp/smoke/bin/python - <<'PY'
+          import hashlib
           import os
           import socket
           import sys
@@ -97,6 +100,7 @@ jobs:
           from agent_reach.execution.v1 import (
               MCPORTER_ARTIFACTS_CAPABILITY,
               NETWORK_ACCESS_CAPABILITY,
+              OPENCLI_SESSION_CAPABILITY,
               PRIVATE_WORKSPACE_CAPABILITY,
               PROTOCOL_VERSION,
               ExecutionContextV1,
@@ -105,6 +109,7 @@ jobs:
               ExecutionSuccessV1,
               McporterArtifactsV1,
               NetworkAccessV1,
+              OpenCliSessionV1,
               PrivateWorkspaceV1,
               execute,
               list_capabilities,
@@ -116,16 +121,20 @@ jobs:
               "agent_reach.execution.v1.v2ex",
               "agent_reach.execution.v1._v2ex_transport",
               "agent_reach.execution.v1.exa",
+              "agent_reach.execution.v1.opencli_social",
           }
           assert runtime_modules.isdisjoint(sys.modules)
           assert "deno" not in sys.modules
           assert {
               "MCPORTER_ARTIFACTS_CAPABILITY",
+              "OPENCLI_SESSION_CAPABILITY",
               "PRIVATE_WORKSPACE_CAPABILITY",
               "McporterArtifactsV1",
+              "OpenCliSessionV1",
               "PrivateWorkspaceV1",
           } <= set(execution_v1.__all__)
           assert execution_v1.McporterArtifactsV1 is McporterArtifactsV1
+          assert execution_v1.OpenCliSessionV1 is OpenCliSessionV1
           assert execution_v1.PrivateWorkspaceV1 is PrivateWorkspaceV1
 
           def loaded_backend_modules():
@@ -155,6 +164,21 @@ jobs:
               ("v2ex", "read.topic"),
               ("v2ex", "read.user"),
               ("exa", "search.web"),
+              ("reddit", "search.posts"),
+              ("reddit", "read.post"),
+              ("reddit", "browse.subreddit"),
+              ("reddit", "browse.hot"),
+              ("reddit", "browse.popular"),
+              ("reddit", "browse.all"),
+              ("reddit", "read.subreddit"),
+              ("facebook", "search"),
+              ("facebook", "read.profile"),
+              ("facebook", "browse.feed"),
+              ("facebook", "browse.groups"),
+              ("instagram", "search.users"),
+              ("instagram", "read.profile"),
+              ("instagram", "browse.user_posts"),
+              ("instagram", "browse.explore"),
           )
           expected_new_capabilities = {
               ("youtube", "search.videos"): (
@@ -214,6 +238,35 @@ jobs:
                   20,
               ),
           }
+          expected_new_capabilities.update(
+              {
+                  (source, operation): (
+                      f"{source}.{operation}.arguments.v1",
+                      (schema,),
+                      "opencli",
+                      "1.8.6-hermes.1",
+                      (OPENCLI_SESSION_CAPABILITY,),
+                      maximum_items,
+                  )
+                  for source, operation, schema, maximum_items in (
+                      ("reddit", "search.posts", "reddit.post.v1", 50),
+                      ("reddit", "read.post", "reddit.thread.item.v1", 14),
+                      ("reddit", "browse.subreddit", "reddit.post.v1", 50),
+                      ("reddit", "browse.hot", "reddit.post.v1", 50),
+                      ("reddit", "browse.popular", "reddit.post.v1", 50),
+                      ("reddit", "browse.all", "reddit.post.v1", 50),
+                      ("reddit", "read.subreddit", "reddit.subreddit.v1", 1),
+                      ("facebook", "search", "facebook.search.result.v1", 50),
+                      ("facebook", "read.profile", "facebook.profile.v1", 1),
+                      ("facebook", "browse.feed", "facebook.post.v1", 50),
+                      ("facebook", "browse.groups", "facebook.group.v1", 50),
+                      ("instagram", "search.users", "instagram.user.v1", 50),
+                      ("instagram", "read.profile", "instagram.profile.v1", 1),
+                      ("instagram", "browse.user_posts", "instagram.post.v1", 50),
+                      ("instagram", "browse.explore", "instagram.post.v1", 50),
+                  )
+              }
+          )
           capability_by_operation = {
               (item.source, item.operation): item for item in capabilities
           }
@@ -232,6 +285,7 @@ jobs:
 
           import agent_reach.execution.v1._v2ex_transport as v2ex_transport
           import agent_reach.execution.v1.exa as exa_execution
+          import agent_reach.execution.v1.opencli_social as opencli_execution
           import agent_reach.execution.v1.v2ex as v2ex_execution
           import agent_reach.execution.v1.youtube as youtube_execution
 
@@ -242,9 +296,28 @@ jobs:
               v2ex_execution: "v2ex.py",
               v2ex_transport: "_v2ex_transport.py",
               exa_execution: "exa.py",
+              opencli_execution: "opencli_social.py",
           }
           for module, name in expected_runtime_files.items():
               assert Path(module.__file__).resolve() == package_file.parent / "execution" / "v1" / name
+          opencli_guard = Path(opencli_execution.__file__).with_name(
+              "_opencli_no_lifecycle.mjs"
+          )
+          assert hashlib.sha256(opencli_guard.read_bytes()).hexdigest() == (
+              opencli_execution._LIFECYCLE_GUARD_SHA256
+          )
+          assert opencli_execution._OPENCLI_OFFICIAL_BASE_COMMIT == (
+              "399c0de2a76eb979aee3a3836cf2d24fd247780f"
+          )
+          assert opencli_execution._OPENCLI_SOURCE_COMMIT == (
+              "9b0ec22faeff186d53836c14f39cbf5cdddfca55"
+          )
+          assert opencli_execution._OPENCLI_SOURCE_TREE == (
+              "fc3e59294a5b06e7e236fb21c8c4a80b7749ed50"
+          )
+          assert opencli_execution._OPENCLI_TARBALL_SHA256 == (
+              "eebe99d2e848927edaa8b10d6edbfaec088a9b4bdd06436be7556601fb1be2a4"
+          )
           expected_signature = (
               "(request: 'ExecutionRequestV1', context: 'ExecutionContextV1') "
               "-> 'ExecutionResultV1'"
@@ -253,6 +326,10 @@ jobs:
               (youtube_execution.execute_youtube, "agent_reach.execution.v1.youtube"),
               (v2ex_execution.execute_v2ex, "agent_reach.execution.v1.v2ex"),
               (exa_execution.execute_exa, "agent_reach.execution.v1.exa"),
+              (
+                  opencli_execution.execute_opencli_social,
+                  "agent_reach.execution.v1.opencli_social",
+              ),
           ):
               assert function.__module__ == module_name
               assert str(signature(function)) == expected_signature
@@ -352,5 +429,5 @@ jobs:
           assert downloader.params["remote_components"] == []
           assert plugin_dirs.value == []
           assert os.environ["YTDLP_NO_PLUGINS"] == "1"
-          print("installed wheel exposes 14 descriptors and closed execution runtimes OK")
+          print("installed wheel exposes 29 descriptors and closed execution runtimes OK")
           PY

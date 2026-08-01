@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -11,6 +12,7 @@ from .contracts import (
     _MAX_BILIBILI_OUTPUT_BYTES,
     _MAX_BILIBILI_QUERY_CHARACTERS,
     _MAX_EXA_OUTPUT_BYTES,
+    _MAX_OPENCLI_OUTPUT_BYTES,
     _MAX_YOUTUBE_AUTHOR_CHARACTERS,
     _MAX_YOUTUBE_OUTPUT_BYTES,
     _YOUTUBE_SUBTITLE_MARKER,
@@ -28,6 +30,7 @@ from .contracts import (
     MAX_URL_CHARACTERS,
     MCPORTER_ARTIFACTS_CAPABILITY,
     NETWORK_ACCESS_CAPABILITY,
+    OPENCLI_SESSION_CAPABILITY,
     PRIVATE_WORKSPACE_CAPABILITY,
     PROTOCOL_VERSION,
     ExecutionContextV1,
@@ -39,11 +42,17 @@ from .contracts import (
     HostCapabilityV1,
     McporterArtifactsV1,
     NetworkAccessV1,
+    OpenCliSessionV1,
     OperationCapabilityV1,
     PrivateWorkspaceV1,
+    _reddit_post_id_from_url,
     _valid_bilibili_video_url,
     _valid_youtube_video_url,
 )
+
+_SOCIAL_IDENTIFIER: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+_SUBREDDIT_IDENTIFIER: Final = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,20}")
+_REDDIT_POST_ID: Final = re.compile(r"[a-z0-9]{1,32}")
 
 
 def _capability(
@@ -80,6 +89,27 @@ def _capability(
         maximum_native_id_characters=MAX_NATIVE_ID_CHARACTERS,
         maximum_author_characters=maximum_author_characters,
         maximum_published_characters=MAX_PUBLISHED_CHARACTERS,
+    )
+
+
+def _opencli_capability(
+    *,
+    source: str,
+    operation: str,
+    argument_schema_id: str,
+    result_schema_id: str,
+    maximum_items: int,
+) -> OperationCapabilityV1:
+    return _capability(
+        source=source,
+        operation=operation,
+        argument_schema_id=argument_schema_id,
+        result_schema_ids=(result_schema_id,),
+        backend_id="opencli",
+        backend_version="1.8.6-hermes.1",
+        required_host_capabilities=(OPENCLI_SESSION_CAPABILITY,),
+        maximum_items=maximum_items,
+        maximum_output_bytes=_MAX_OPENCLI_OUTPUT_BYTES,
     )
 
 
@@ -245,6 +275,111 @@ _CAPABILITIES: Final = (
         maximum_items=20,
         maximum_output_bytes=_MAX_EXA_OUTPUT_BYTES,
     ),
+    _opencli_capability(
+        source="reddit",
+        operation="search.posts",
+        argument_schema_id="reddit.search.posts.arguments.v1",
+        result_schema_id="reddit.post.v1",
+        maximum_items=50,
+    ),
+    _opencli_capability(
+        source="reddit",
+        operation="read.post",
+        argument_schema_id="reddit.read.post.arguments.v1",
+        result_schema_id="reddit.thread.item.v1",
+        maximum_items=14,
+    ),
+    _opencli_capability(
+        source="reddit",
+        operation="browse.subreddit",
+        argument_schema_id="reddit.browse.subreddit.arguments.v1",
+        result_schema_id="reddit.post.v1",
+        maximum_items=50,
+    ),
+    _opencli_capability(
+        source="reddit",
+        operation="browse.hot",
+        argument_schema_id="reddit.browse.hot.arguments.v1",
+        result_schema_id="reddit.post.v1",
+        maximum_items=50,
+    ),
+    _opencli_capability(
+        source="reddit",
+        operation="browse.popular",
+        argument_schema_id="reddit.browse.popular.arguments.v1",
+        result_schema_id="reddit.post.v1",
+        maximum_items=50,
+    ),
+    _opencli_capability(
+        source="reddit",
+        operation="browse.all",
+        argument_schema_id="reddit.browse.all.arguments.v1",
+        result_schema_id="reddit.post.v1",
+        maximum_items=50,
+    ),
+    _opencli_capability(
+        source="reddit",
+        operation="read.subreddit",
+        argument_schema_id="reddit.read.subreddit.arguments.v1",
+        result_schema_id="reddit.subreddit.v1",
+        maximum_items=1,
+    ),
+    _opencli_capability(
+        source="facebook",
+        operation="search",
+        argument_schema_id="facebook.search.arguments.v1",
+        result_schema_id="facebook.search.result.v1",
+        maximum_items=50,
+    ),
+    _opencli_capability(
+        source="facebook",
+        operation="read.profile",
+        argument_schema_id="facebook.read.profile.arguments.v1",
+        result_schema_id="facebook.profile.v1",
+        maximum_items=1,
+    ),
+    _opencli_capability(
+        source="facebook",
+        operation="browse.feed",
+        argument_schema_id="facebook.browse.feed.arguments.v1",
+        result_schema_id="facebook.post.v1",
+        maximum_items=50,
+    ),
+    _opencli_capability(
+        source="facebook",
+        operation="browse.groups",
+        argument_schema_id="facebook.browse.groups.arguments.v1",
+        result_schema_id="facebook.group.v1",
+        maximum_items=50,
+    ),
+    _opencli_capability(
+        source="instagram",
+        operation="search.users",
+        argument_schema_id="instagram.search.users.arguments.v1",
+        result_schema_id="instagram.user.v1",
+        maximum_items=50,
+    ),
+    _opencli_capability(
+        source="instagram",
+        operation="read.profile",
+        argument_schema_id="instagram.read.profile.arguments.v1",
+        result_schema_id="instagram.profile.v1",
+        maximum_items=1,
+    ),
+    _opencli_capability(
+        source="instagram",
+        operation="browse.user_posts",
+        argument_schema_id="instagram.browse.user_posts.arguments.v1",
+        result_schema_id="instagram.post.v1",
+        maximum_items=50,
+    ),
+    _opencli_capability(
+        source="instagram",
+        operation="browse.explore",
+        argument_schema_id="instagram.browse.explore.arguments.v1",
+        result_schema_id="instagram.post.v1",
+        maximum_items=50,
+    ),
 )
 _CAPABILITY_BY_OPERATION: Final = MappingProxyType(
     {(capability.source, capability.operation): capability for capability in _CAPABILITIES}
@@ -316,6 +451,10 @@ def execute(
         from .exa import execute_exa
 
         return execute_exa(request, context)
+    if request.source in {"reddit", "facebook", "instagram"}:
+        from .opencli_social import execute_opencli_social
+
+        return execute_opencli_social(request, context)
     return _failure(request, "unsupported_source")
 
 
@@ -411,6 +550,46 @@ def _valid_arguments(
         return _valid_v2ex_identifier(arguments["username"])
     if key == ("exa", "search.web") and set(arguments) == {"query", "limit"}:
         return _valid_query_and_limit(arguments, maximum_limit=50)
+    if key in {
+        ("reddit", "search.posts"),
+        ("facebook", "search"),
+        ("instagram", "search.users"),
+    } and set(arguments) == {"query", "limit"}:
+        return _valid_query_and_limit(arguments, maximum_limit=capability.maximum_items)
+    if key == ("reddit", "read.post") and set(arguments) == {"url"}:
+        return _reddit_post_id_from_url(arguments["url"]) is not None
+    if key == ("reddit", "browse.subreddit") and set(arguments) == {
+        "subreddit",
+        "limit",
+    }:
+        return bool(
+            _valid_subreddit(arguments["subreddit"])
+            and _valid_limit(arguments["limit"], capability.maximum_items)
+        )
+    if key == ("reddit", "read.subreddit") and set(arguments) == {"subreddit"}:
+        return _valid_subreddit(arguments["subreddit"])
+    if key in {
+        ("reddit", "browse.hot"),
+        ("reddit", "browse.popular"),
+        ("reddit", "browse.all"),
+        ("facebook", "browse.feed"),
+        ("facebook", "browse.groups"),
+        ("instagram", "browse.explore"),
+    } and set(arguments) == {"limit"}:
+        return _valid_limit(arguments["limit"], capability.maximum_items)
+    if key in {
+        ("facebook", "read.profile"),
+        ("instagram", "read.profile"),
+    } and set(arguments) == {"username"}:
+        return _valid_social_identifier(arguments["username"])
+    if key == ("instagram", "browse.user_posts") and set(arguments) == {
+        "username",
+        "limit",
+    }:
+        return bool(
+            _valid_social_identifier(arguments["username"])
+            and _valid_limit(arguments["limit"], capability.maximum_items)
+        )
     return False
 
 
@@ -440,6 +619,18 @@ def _valid_v2ex_identifier(value: object) -> bool:
     )
 
 
+def _valid_limit(value: object, maximum: int) -> bool:
+    return type(value) is int and 1 <= value <= maximum
+
+
+def _valid_subreddit(value: object) -> bool:
+    return bool(type(value) is str and value.isascii() and _SUBREDDIT_IDENTIFIER.fullmatch(value))
+
+
+def _valid_social_identifier(value: object) -> bool:
+    return bool(type(value) is str and value.isascii() and _SOCIAL_IDENTIFIER.fullmatch(value))
+
+
 def _valid_host_capabilities(
     capability: OperationCapabilityV1,
     host_capabilities: tuple[HostCapabilityV1, ...],
@@ -458,4 +649,6 @@ def _host_capability_id(capability: HostCapabilityV1) -> str:
         return PRIVATE_WORKSPACE_CAPABILITY
     if type(capability) is McporterArtifactsV1:
         return MCPORTER_ARTIFACTS_CAPABILITY
+    if type(capability) is OpenCliSessionV1:
+        return OPENCLI_SESSION_CAPABILITY
     raise AssertionError("unreachable host capability")

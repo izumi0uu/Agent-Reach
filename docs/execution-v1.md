@@ -15,6 +15,7 @@ from agent_reach.execution.v1 import (
     FetchedDocumentV1,
     McporterArtifactsV1,
     NetworkAccessV1,
+    OpenCliSessionV1,
     PrivateWorkspaceV1,
     execute,
     list_capabilities,
@@ -54,9 +55,28 @@ youtube_result = execute(
     youtube_request,
     ExecutionContextV1((NetworkAccessV1(),)),
 )
+
+social_session = OpenCliSessionV1(
+    node_executable=operator_selected_node,
+    node_sha256=attested_node_sha256,
+    opencli_root=dedicated_opencli_root,
+    opencli_cli=dedicated_opencli_entrypoint,
+    opencli_tree_sha256=attested_opencli_tree_sha256,
+    session_home=trusted_session_home,
+)
+reddit_request = ExecutionRequestV1(
+    PROTOCOL_VERSION,
+    "reddit",
+    "search.posts",
+    {"query": "agent runtime", "limit": 5},
+)
+reddit_result = execute(
+    reddit_request,
+    ExecutionContextV1((social_session,)),
+)
 ```
 
-The v1 registry contains fourteen operations:
+The v1 registry contains twenty-nine operations:
 
 - `rss:read.feed` and `rss:browse.entries`
 - `bilibili:search.videos`, `bilibili:read.video`, `bilibili:browse.hot`, and
@@ -66,6 +86,13 @@ The v1 registry contains fourteen operations:
 - `v2ex:browse.hot`, `v2ex:browse.node_topics`, `v2ex:read.topic`, and
   `v2ex:read.user`
 - `exa:search.web`
+- `reddit:search.posts`, `reddit:read.post`, `reddit:browse.subreddit`,
+  `reddit:browse.hot`, `reddit:browse.popular`, `reddit:browse.all`, and
+  `reddit:read.subreddit`
+- `facebook:search`, `facebook:read.profile`, `facebook:browse.feed`, and
+  `facebook:browse.groups`
+- `instagram:search.users`, `instagram:read.profile`,
+  `instagram:browse.user_posts`, and `instagram:browse.explore`
 
 Requests have closed operation-specific arguments. They cannot choose a
 backend, command, executable, argv, transport, endpoint, MCP method,
@@ -141,6 +168,94 @@ stdin. The child receives a sterile environment, bounded concurrent pipes,
 and process-group kill-and-reap cleanup. Exa receives the query and may retain
 it; hosts must not describe this route as provider-private or no-query-log.
 
+### OpenCLI social execution
+
+The fifteen Reddit, Facebook, and Instagram operations require exactly one
+`OpenCliSessionV1` and use only `@jackwener/opencli@1.8.6-hermes.1`. The descriptor,
+not the request or host, selects the command. Every command also appends the
+fixed `--format yaml` output selector:
+
+| Operation | Fixed OpenCLI arguments before `--format yaml` |
+| --- | --- |
+| `reddit:search.posts` | `reddit search QUERY --limit N` |
+| `reddit:read.post` | `reddit read POST_ID --sort best --limit 3 --depth 2 --replies 2 --max-length 800` |
+| `reddit:browse.subreddit` | `reddit subreddit NAME --sort hot --time all --limit N` |
+| `reddit:browse.hot` | `reddit hot --limit N` |
+| `reddit:browse.popular` | `reddit popular --limit N` |
+| `reddit:browse.all` | `reddit frontpage --limit N` |
+| `reddit:read.subreddit` | `reddit subreddit-info NAME` |
+| `facebook:search` | `facebook search QUERY --limit N` |
+| `facebook:read.profile` | `facebook profile USERNAME` |
+| `facebook:browse.feed` | `facebook feed --limit N` |
+| `facebook:browse.groups` | `facebook groups --limit N` |
+| `instagram:search.users` | `instagram search QUERY --limit N` |
+| `instagram:read.profile` | `instagram profile USERNAME` |
+| `instagram:browse.user_posts` | `instagram user USERNAME --limit N` |
+| `instagram:browse.explore` | `instagram explore --limit N` |
+
+`OpenCliSessionV1` is an immutable host authority, not request data. It binds
+an absolute Node executable and SHA-256, an absolute dedicated npm install
+prefix and canonical entrypoint, the approved full prefix-tree SHA-256, and an
+absolute trusted session home. The fixed entrypoint is
+`node_modules/@jackwener/opencli/dist/src/main.js`; the attested prefix includes
+OpenCLI and every production dependency that Node can resolve. Installations
+with symlinks, hard-linked files, or group/other-writable entries are rejected.
+
+The reviewed package is built from official base
+`399c0de2a76eb979aee3a3836cf2d24fd247780f`, owner-fork commit
+`9b0ec22faeff186d53836c14f39cbf5cdddfca55`, and Git tree
+`fc3e59294a5b06e7e236fb21c8c4a80b7749ed50`. Its tarball SHA-256 is
+`eebe99d2e848927edaa8b10d6edbfaec088a9b4bdd06436be7556601fb1be2a4`
+and SHA-512 is
+`hhVlYQ9LUtxoP1Y7IfnZxTjOxfGf0IbdJrHYpBmtxfwophmlAJ7xXPFYax+FFL5ZmBCfSppPfZ061aL1Cb2shg==`.
+The Git tree identifies reviewed source; it is not the 64-character installed
+prefix digest carried by `OpenCliSessionV1`.
+
+Build the dedicated prefix from that reviewed tarball with lifecycle scripts
+and npm bin links disabled, for example with
+`npm install --ignore-scripts --no-bin-links --omit=dev`. Do not point this
+capability at a general global npm tree: unrelated packages and mutable bin
+links would become part of the execution authority.
+
+Before every attempt the runtime copies Node, the complete npm prefix, and the
+fixed lifecycle guard into a new private directory. It validates the copied
+bytes, path ownership and permissions, fixed entrypoint, tree digest, and exact
+package name/version/bin contract, then executes only the private copies. A
+source-path replacement after validation cannot change the launched Node,
+entrypoint, dependency, or guard. Runtime authority comes from the current
+operator-approved installed-prefix digest, not a registry lookup or PATH
+discovery, and callers cannot select another executable.
+
+Each attempt receives a new private `HOME`, `USERPROFILE`, `XDG_CONFIG_HOME`,
+temporary directory, and working directory. Only
+`OPENCLI_CONFIG_DIR=<session_home>/.opencli` points back to the operator-approved
+session so OpenCLI can reach its existing local browser bridge configuration.
+The trusted session home is not used as the child HOME; this prevents ambient
+user OpenCLI adapters and plugins under the normal HOME from replacing the
+reviewed built-in social commands. PATH, proxy, credential, Cookie, and other
+ambient environment variables are not inherited. The session directory is
+owner-private and canonicalized, but its live browser/daemon state is
+deliberately not included in the install-tree digest. It remains a mutable,
+trusted-device capability and may fail closed when disconnected, logged out,
+challenged, or incompatible.
+
+This capability grants use of an already configured browser session; it does
+not log in, export cookies, copy a Chrome profile, select a browser/profile, or
+grant arbitrary browser navigation. The Node/OpenCLI process still runs with
+the local user's filesystem authority, so the private environment is a
+containment boundary, not a kernel sandbox. Hosts should keep the session on a
+trusted device, narrow authorization per operation, and never send capability
+paths or session material to an untrusted remote host.
+
+The runtime starts Node directly without a shell, closes stdin, bounds stdout
+and stderr concurrently, and kills and reaps the process group on deadline,
+cancellation, output overflow, or exchange failure. Success YAML rejects
+duplicate keys, aliases, custom tags, unexpected columns, non-scalar values,
+and depth/node/byte overflow before source-specific projection. Failures use
+only an allowlisted OpenCLI error code; provider messages, queries, usernames,
+post IDs, paths, session details, and raw output are never copied into an
+execution failure.
+
 Success and failure are immutable discriminated variants. A success identifies
 the selected backend and version. A failure contains only protocol,
 source-operation correlation, optional selected-backend identity, and a closed
@@ -152,11 +267,11 @@ to the host instead of being converted into a backend result.
 
 `list_capabilities()` is static. It does not import `feedparser`, `bili_cli`,
 `yt_dlp`, `yt_dlp_ejs`, `deno`, `httpcore`, or an MCP client; inspect
-configuration or artifacts; read credentials; access the network or
-filesystem; or start a process. Hosts should validate the exact protocol,
-descriptors, schemas, limits, backend identity, dependency commit, and
-installed backend version before enabling an operation. A newly published
-capability is not authority for a host to enable it automatically.
+configuration or artifacts; load the OpenCLI social runtime; read credentials;
+access the network or filesystem; or start a process. Hosts should validate
+the exact protocol, descriptors, schemas, limits, backend identity, dependency
+commit, and installed backend version before enabling an operation. A newly
+published capability is not authority for a host to enable it automatically.
 
 ## Fork update discipline
 

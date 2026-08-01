@@ -179,14 +179,27 @@ AI Agent 已经能帮你写代码、改文档、管项目——但你让它去�
 ### 结构化执行 API（维护者集成）
 
 `agent_reach.execution.v1` 提供一个附加的、封闭的 Python 执行合同，供需要
-自行负责授权、网络/进程隔离和审计的宿主集成。当前切片包含 RSS 2 项、
-Bilibili 4 项、YouTube 3 项、V2EX 4 项和 Exa Web 搜索，共 14 项闭合操作。
-RSS 只接受宿主已经安全获取的有界字节；其余网络操作只接受固定的类型化
-host capability。YouTube 固定 `yt-dlp==2026.7.4`，V2EX 固定公开 API
-合同，Exa 固定 `mcporter` 的 Web 方法和经宿主证明的执行文件闭包。host
-capability 不提供 OS 隔离，HOME、代理、凭据、超时和进程清理由宿主负责。
-合同不会开放命令、argv、Cookie、凭据、endpoint、MCP 方法或 backend
-选择。完整合同与 fork 跟随上游的 rebase 规则见
+自行负责授权、网络/进程隔离和审计的宿主集成。当前 registry 共 29 项闭合
+操作：RSS 2 项、Bilibili 4 项、YouTube 3 项、V2EX 4 项、Exa Web 1 项，
+以及 Reddit 7 项、Facebook 4 项和 Instagram 4 项。后三个平台固定使用
+`@jackwener/opencli@1.8.6-hermes.1`，覆盖搜索、帖子/主页读取和对应的浏览操作；
+每项 operation 都有独立 descriptor，不开放通用 OpenCLI 命令入口。
+
+这 15 项社交操作只接受宿主构造的 `OpenCliSessionV1`：绝对 Node/OpenCLI
+路径、Node SHA-256、包含生产依赖的完整 OpenCLI 安装前缀 tree SHA-256，以及
+可信设备上的既有会话目录。runtime 每次执行都会把 Node、完整安装闭包和固定
+lifecycle guard 复制到私有临时目录，复验副本 identity 和 package manifest，
+并且只执行这些副本。子进程使用一次性的私有 `HOME`/XDG/TMP，只通过
+`OPENCLI_CONFIG_DIR=<session_home>/.opencli` 使用已经配置好的本地浏览器桥接
+会话，因此不会把可信 session home 当作普通 HOME，也不会从普通 HOME
+加载可覆盖内置命令的用户 adapter/plugin。它不会登录、导出 Cookie、复制
+Chrome profile，或把任意浏览器操作授权给调用方。
+
+这仍然不是 OS sandbox：Node、OpenCLI 和浏览器会话必须留在可信设备，宿主
+还要负责授权、隔离、硬超时、取消、独立结果校验和审计。合同不会开放命令、
+argv、Cookie、凭据、endpoint、MCP 方法、browser/profile 或 backend 选择；
+YAML、输出、错误和进程组清理也由封闭 runtime 约束。完整合同与 fork 跟随
+上游的 rebase 规则见
 [execution v1 guide](docs/execution-v1.md)。
 
 ### 🔌 每个平台 = 首选 + 备选的有序后端列表

@@ -433,7 +433,7 @@ from agent_reach.execution.v1 import (
     execute,
     list_capabilities,
 )
-assert len(list_capabilities()) == 14
+assert len(list_capabilities()) == 29
 assert 'agent_reach.execution.v1.bilibili' not in sys.modules
 assert not any(name == 'bili_cli' or name.startswith('bili_cli.') for name in sys.modules)
 failure = execute(

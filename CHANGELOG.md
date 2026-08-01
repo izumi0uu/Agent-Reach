@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ---
 
+## [Unreleased]
+
+### Structured host execution
+
+- Reintroduced four read-only Instagram operations through the closed
+  `agent_reach.execution.v1` host API. They use the exact owner-reviewed
+  `@jackwener/opencli@1.8.6-hermes.1` artifact and an existing trusted-device
+  browser session; the removed Instaloader path remains removed.
+- Added the complete read-only Reddit and Facebook catalog surfaces through
+  the same fixed-command, typed-error runtime. No generic OpenCLI command or
+  browser authority is exposed.
+
 ## [1.3.1] - 2026-03-27
 
 ### 🐛 Bug Fixes / 修复
