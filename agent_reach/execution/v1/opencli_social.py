@@ -390,6 +390,7 @@ def _validate_session(
         maximum_bytes=_MAX_LIFECYCLE_GUARD_BYTES,
         executable=False,
         destination_mode=0o400,
+        allow_multiple_links=True,
         checkpoint=attestation_checkpoint,
     )
     if guard_digest != _LIFECYCLE_GUARD_SHA256:
@@ -416,6 +417,7 @@ def _lifecycle_guard_path(*, checkpoint: Callable[[], None] | None = None) -> Pa
         _file_sha256(
             path,
             maximum_bytes=_MAX_LIFECYCLE_GUARD_BYTES,
+            allow_multiple_links=True,
             checkpoint=checkpoint,
         )
         != _LIFECYCLE_GUARD_SHA256
@@ -456,6 +458,7 @@ def _file_sha256(
     *,
     maximum_bytes: int,
     executable: bool = False,
+    allow_multiple_links: bool = False,
     checkpoint: Callable[[], None] | None = None,
 ) -> str:
     try:
@@ -465,7 +468,7 @@ def _file_sha256(
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_uid != os.getuid()
-            or metadata.st_nlink != 1
+            or (not allow_multiple_links and metadata.st_nlink != 1)
             or metadata.st_size <= 0
             or metadata.st_size > maximum_bytes
             or metadata.st_mode & 0o022
@@ -507,6 +510,7 @@ def _copy_regular_file(
     executable: bool,
     destination_mode: int,
     allow_empty: bool = False,
+    allow_multiple_links: bool = False,
     checkpoint: Callable[[], None] | None = None,
 ) -> tuple[str, int]:
     try:
@@ -516,7 +520,7 @@ def _copy_regular_file(
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_uid != os.getuid()
-            or metadata.st_nlink != 1
+            or (not allow_multiple_links and metadata.st_nlink != 1)
             or (not allow_empty and metadata.st_size <= 0)
             or metadata.st_size > maximum_bytes
             or metadata.st_mode & 0o022
