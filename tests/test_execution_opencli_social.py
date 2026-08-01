@@ -1213,6 +1213,43 @@ def test_node_and_tree_are_revalidated_before_every_execution(
     assert calls == 2
 
 
+@pytest.mark.parametrize("artifact", ["node", "opencli"], ids=("node", "opencli"))
+def test_user_selected_artifacts_reject_hardlinks(
+    artifact: str,
+    closure: _Closure,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = closure.capability()
+    selected = closure.node if artifact == "node" else closure.cli
+    os.link(selected, closure.root.parent / f"{artifact}-hardlink")
+    spawns = 0
+
+    with pytest.raises(opencli._ArtifactIncompatibleError):
+        if artifact == "node":
+            opencli._file_sha256(
+                selected,
+                maximum_bytes=opencli._MAX_NODE_BYTES,
+                executable=True,
+            )
+        else:
+            opencli._tree_sha256(closure.root)
+
+    def unexpected_spawn(*_: object, **__: object) -> object:
+        nonlocal spawns
+        spawns += 1
+        raise AssertionError("hardlinked user artifact reached process creation")
+
+    monkeypatch.setattr(opencli.subprocess, "Popen", unexpected_spawn)
+    result = execute(
+        _request("facebook", "search", {"query": QUERY_CANARY, "limit": 1}),
+        _context(session),
+    )
+
+    _assert_failure(result, "backend_incompatible")
+    assert selected.stat().st_nlink == 2
+    assert spawns == 0
+
+
 def test_execution_uses_private_verified_bytes_after_original_paths_are_replaced(
     closure: _Closure,
     tmp_path: Path,
@@ -1252,6 +1289,48 @@ def test_execution_uses_private_verified_bytes_after_original_paths_are_replaced
     result = execute(
         _request("facebook", "search", {"query": QUERY_CANARY, "limit": 1}),
         _context(session),
+    )
+
+    assert isinstance(result, ExecutionSuccessV1)
+
+
+def test_hardlinked_packaged_lifecycle_guard_is_copied_to_private_single_link_snapshot(
+    closure: _Closure,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_guard = opencli._lifecycle_guard_path().read_bytes()
+    package = tmp_path.resolve() / "installed" / "agent_reach" / "execution" / "v1"
+    package.mkdir(parents=True)
+    fake_runtime = package / "opencli_social.py"
+    fake_runtime.write_text("runtime-placeholder", encoding="utf-8")
+    cached_guard = tmp_path.resolve() / "uv-cache" / "_opencli_no_lifecycle.mjs"
+    cached_guard.parent.mkdir()
+    cached_guard.write_bytes(original_guard)
+    fake_guard = package / "_opencli_no_lifecycle.mjs"
+    os.link(cached_guard, fake_guard)
+    monkeypatch.setattr(opencli, "__file__", str(fake_runtime))
+
+    assert fake_guard.stat().st_nlink == 2
+
+    def run(
+        argv: tuple[str, ...],
+        environment: Mapping[str, str],
+        *_args: object,
+    ) -> tuple[int, bytes, bytes]:
+        snapshot_guard = Path(environment["NODE_OPTIONS"].removeprefix("--import=")[7:])
+        source = fake_guard.stat()
+        snapshot = snapshot_guard.stat()
+        assert snapshot_guard.read_bytes() == original_guard
+        assert snapshot.st_nlink == 1
+        assert snapshot.st_ino != source.st_ino
+        assert stat.S_IMODE(snapshot.st_mode) == 0o400
+        return 0, _valid_search_rows(), b""
+
+    monkeypatch.setattr(opencli, "_run_process", run)
+    result = execute(
+        _request("facebook", "search", {"query": QUERY_CANARY, "limit": 1}),
+        _context(closure.capability()),
     )
 
     assert isinstance(result, ExecutionSuccessV1)
