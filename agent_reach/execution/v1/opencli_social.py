@@ -57,11 +57,11 @@ _PACKAGE_NAME: Final = "@jackwener/opencli"
 _PACKAGE_ROOT: Final = Path("node_modules/@jackwener/opencli")
 _PACKAGE_CLI: Final = _PACKAGE_ROOT / "dist/src/main.js"
 _OPENCLI_OFFICIAL_BASE_COMMIT: Final = "399c0de2a76eb979aee3a3836cf2d24fd247780f"
-_OPENCLI_SOURCE_COMMIT: Final = "9b0ec22faeff186d53836c14f39cbf5cdddfca55"
-_OPENCLI_SOURCE_TREE: Final = "fc3e59294a5b06e7e236fb21c8c4a80b7749ed50"
-_OPENCLI_TARBALL_SHA256: Final = "eebe99d2e848927edaa8b10d6edbfaec088a9b4bdd06436be7556601fb1be2a4"
+_OPENCLI_SOURCE_COMMIT: Final = "594b21498680f6372279f178aa9b3aaed2c71e35"
+_OPENCLI_SOURCE_TREE: Final = "be64296855727d00478cc857f2b26eb7d3790057"
+_OPENCLI_TARBALL_SHA256: Final = "dac98c69802621d55d8e3a5ae7032f47ab22b3785331a69499a907456f9dfb73"
 _OPENCLI_TARBALL_SHA512: Final = (
-    "hhVlYQ9LUtxoP1Y7IfnZxTjOxfGf0IbdJrHYpBmtxfwophmlAJ7xXPFYax+FFL5ZmBCfSppPfZ061aL1Cb2shg=="
+    "kiYpXZ4jrwr6q6yVHCclL0wv3alO0JN1+GOjeY9S9q+73EKkZ3ZQE0nIiE7WoK5MC1ttK918PkOhYO3uKQPgyQ=="
 )
 _SOCIAL_SOURCES: Final = frozenset({"reddit", "facebook", "instagram"})
 _REDDIT_POST_ID: Final = re.compile(r"[a-z0-9]{1,32}")

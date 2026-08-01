@@ -203,11 +203,11 @@ with symlinks, hard-linked files, or group/other-writable entries are rejected.
 
 The reviewed package is built from official base
 `399c0de2a76eb979aee3a3836cf2d24fd247780f`, owner-fork commit
-`9b0ec22faeff186d53836c14f39cbf5cdddfca55`, and Git tree
-`fc3e59294a5b06e7e236fb21c8c4a80b7749ed50`. Its tarball SHA-256 is
-`eebe99d2e848927edaa8b10d6edbfaec088a9b4bdd06436be7556601fb1be2a4`
+`594b21498680f6372279f178aa9b3aaed2c71e35`, and Git tree
+`be64296855727d00478cc857f2b26eb7d3790057`. Its tarball SHA-256 is
+`dac98c69802621d55d8e3a5ae7032f47ab22b3785331a69499a907456f9dfb73`
 and SHA-512 is
-`hhVlYQ9LUtxoP1Y7IfnZxTjOxfGf0IbdJrHYpBmtxfwophmlAJ7xXPFYax+FFL5ZmBCfSppPfZ061aL1Cb2shg==`.
+`kiYpXZ4jrwr6q6yVHCclL0wv3alO0JN1+GOjeY9S9q+73EKkZ3ZQE0nIiE7WoK5MC1ttK918PkOhYO3uKQPgyQ==`.
 The Git tree identifies reviewed source; it is not the 64-character installed
 prefix digest carried by `OpenCliSessionV1`.
 
@@ -216,6 +216,10 @@ and npm bin links disabled, for example with
 `npm install --ignore-scripts --no-bin-links --omit=dev`. Do not point this
 capability at a general global npm tree: unrelated packages and mutable bin
 links would become part of the execution authority.
+
+The reviewed production-only prefix contains 17 dependency packages, 3,688
+files, and 295 directories. Its Agent-Reach tree SHA-256 is
+`54b5a6dbd396c4dc4ade80f92085a587b9acfb796a6fa72cf5a22b1a1521bac3`.
 
 Before every attempt the runtime copies Node, the complete npm prefix, and the
 fixed lifecycle guard into a new private directory. It validates the copied
