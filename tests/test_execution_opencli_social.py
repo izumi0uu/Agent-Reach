@@ -8,6 +8,7 @@ import os
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
@@ -34,6 +35,7 @@ from agent_reach.execution.v1 import (
 QUERY_CANARY = "secret-query-canary"
 PATH_CANARY = "/private/user/session/canary"
 POST_URL = "https://www.reddit.com/r/Python/comments/abc123/example/"
+REVIEWED_LIFECYCLE_GUARD_SHA256 = "9c9cd9bf8163fb3fba863f94a71e9ea09ea3323b84f89a06b55e3d1f19515213"
 
 
 class _AttestationCancelled(BaseException):
@@ -933,7 +935,7 @@ def test_ranked_and_indexed_results_require_the_complete_one_based_sequence(
         ("instagram", "browse.user_posts", "index"),
     ],
 )
-def test_duplicate_list_identifiers_fail_closed(
+def test_repeated_list_ordinals_fail_closed(
     source: str,
     operation: str,
     ordinal_field: str,
@@ -956,6 +958,39 @@ def test_duplicate_list_identifiers_fail_closed(
         opencli,
         "_run_process",
         lambda *_args, **_kwargs: (0, _yaml((first, second)), b""),
+    )
+    monkeypatch.chdir(closure.root.parent)
+
+    result = execute(
+        _request(source, operation, case.arguments),
+        _context(closure.capability()),
+    )
+
+    _assert_failure(result, "backend_contract_violation")
+
+
+@pytest.mark.parametrize(
+    ("source", "operation"),
+    [
+        ("facebook", "read.profile"),
+        ("instagram", "read.profile"),
+    ],
+)
+def test_single_entity_profiles_reject_extra_rows(
+    source: str,
+    operation: str,
+    closure: _Closure,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = next(
+        candidate
+        for candidate in _operation_cases()
+        if (candidate.source, candidate.operation) == (source, operation)
+    )
+    monkeypatch.setattr(
+        opencli,
+        "_run_process",
+        lambda *_args, **_kwargs: (0, _yaml((case.rows[0], case.rows[0])), b""),
     )
     monkeypatch.chdir(closure.root.parent)
 
@@ -1222,12 +1257,23 @@ def test_execution_uses_private_verified_bytes_after_original_paths_are_replaced
     assert isinstance(result, ExecutionSuccessV1)
 
 
+def test_tree_attestation_rejects_special_permission_bits(closure: _Closure) -> None:
+    package_manifest = closure.package_root / "package.json"
+    package_manifest.chmod(0o1755)
+
+    assert package_manifest.stat().st_mode & stat.S_ISVTX
+
+    with pytest.raises(opencli._ArtifactIncompatibleError):
+        opencli._tree_sha256(closure.root)
+
+
 def test_lifecycle_guard_has_a_frozen_identity_and_rejects_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     guard = opencli._lifecycle_guard_path()
-    assert hashlib.sha256(guard.read_bytes()).hexdigest() == opencli._LIFECYCLE_GUARD_SHA256
+    assert opencli._LIFECYCLE_GUARD_SHA256 == REVIEWED_LIFECYCLE_GUARD_SHA256
+    assert hashlib.sha256(guard.read_bytes()).hexdigest() == REVIEWED_LIFECYCLE_GUARD_SHA256
 
     package = tmp_path.resolve() / "agent_reach" / "execution" / "v1"
     package.mkdir(parents=True)
@@ -1835,11 +1881,23 @@ try {{
     const fetchWithNodeNetwork = async (input, init) => {{
       installedFetchCalls += 1;
       const target = new URL(input instanceof Request ? input.url : String(input));
-      if (target.origin === "http://127.0.0.1:19825") {{
+      const method = String(
+        init?.method ?? (input instanceof Request ? input.method : "GET"),
+      ).toUpperCase();
+      if (
+        target.port === "19825" &&
+        new Set(["127.0.0.1", "localhost", "[::1]", "::1"]).has(
+          target.hostname.toLowerCase(),
+        ) &&
+        target.pathname === "/shutdown" &&
+        method === "POST"
+      ) {{
         markLifecycleMutation("shutdown-fetch-reached");
         return new Response("unsafe");
       }}
-      return capturedFetch(input, init);
+      return target.protocol === "data:"
+        ? capturedFetch(input, init)
+        : new Response("delegated");
     }};
 
     globalThis.fetch = ((input, init) => fetchWithNodeNetwork(input, init));
@@ -1847,12 +1905,23 @@ try {{
     if ((await safeResponse.text()) !== "ready" || installedFetchCalls !== 1) {{
       throw new Error("OpenCLI fetch replacement failed");
     }}
-    await expectDenied(() => globalThis.fetch(
-      "http://127.0.0.1:19825/shutdown",
-      {{method: "POST"}},
-    ));
+    for (const [input, init] of [
+      ["http://127.0.0.1:19825/shutdown", {{method: "POST"}}],
+      [new Request("http://localhost:19825/shutdown", {{method: "POST"}}), undefined],
+      ["http://[::1]:19825/shutdown", {{method: "post"}}],
+      ["http://127.1:19825/shutdown", {{method: "POST"}}],
+    ]) {{
+      await expectDenied(() => globalThis.fetch(input, init));
+    }}
     if (installedFetchCalls !== 1) {{
       throw new Error("shutdown reached the installed fetch");
+    }}
+    const delegatedResponse = await globalThis.fetch(
+      "http://example.test:19825/shutdown",
+      {{method: "POST"}},
+    );
+    if ((await delegatedResponse.text()) !== "delegated" || installedFetchCalls !== 2) {{
+      throw new Error("non-loopback fetch was not delegated");
     }}
     await expectDenied(() => {{
       globalThis.fetch = (() => Promise.resolve(new Response("unsafe")));
@@ -2053,7 +2122,7 @@ def test_process_timeout_kills_and_reaps_before_redacted_failure(
         reaped.append(process.pid)
 
     monkeypatch.setattr(opencli, "_kill_and_reap", kill_and_reap)
-    monkeypatch.setattr(opencli, "_PROCESS_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(opencli, "_PROCESS_TIMEOUT_SECONDS", 1.5)
     monkeypatch.chdir(closure.root.parent)
 
     result = execute(

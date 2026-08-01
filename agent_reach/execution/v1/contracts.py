@@ -64,6 +64,7 @@ _POSITIVE_DECIMAL: Final = re.compile(r"[1-9][0-9]{0,31}")
 _V2EX_IDENTIFIER: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _REDDIT_POST_ID: Final = re.compile(r"[a-z0-9]{1,32}")
 _SOCIAL_USERNAME: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+_SUBREDDIT_IDENTIFIER: Final = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,20}")
 _SHA256: Final = re.compile(r"[0-9a-f]{64}")
 
 ExecutionErrorCodeV1 = Literal[
@@ -1264,7 +1265,7 @@ def _valid_opencli_social_result(
         native_id = item.fields.get("native_id")
         return bool(
             type(native_id) is str
-            and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{2,20}", native_id)
+            and _SUBREDDIT_IDENTIFIER.fullmatch(native_id)
             and item.fields.get("url") == f"https://www.reddit.com/r/{native_id}/"
             and item.fields.get("nsfw") in {0, 1}
         )

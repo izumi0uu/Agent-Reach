@@ -236,7 +236,7 @@ channels/
 |----------|------|-----|
 | 웹 페이지 읽기 | [Jina Reader](https://github.com/jina-ai/reader) | 9.8K stars, 무료, API key 불필요 |
 | 트윗 읽기 | [twitter-cli](https://github.com/public-clis/twitter-cli) | 2.1K stars, cookie 인증, 검색/읽기/타임라인/글 |
-| Reddit | [rdt-cli](https://github.com/public-clis/rdt-cli) | 304 stars, cookie 인증, 검색 + 전체 글 + 댓글 |
+| Reddit 기존 직접 호출 채널 | [rdt-cli](https://github.com/public-clis/rdt-cli) | 구조화된 OpenCLI `execution.v1` Reddit 작업과 별개이며 그 fallback이 아님 |
 | YouTube 자막 + 검색 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | YouTube 및 지원 비디오 사이트용(Bilibili에는 사용하지 않음) |
 | Bilibili | [bili-cli](https://github.com/public-clis/bilibili-cli) ▸ OpenCLI ▸ 검색 API | yt-dlp는 412 차단으로 폐기. bili-cli는 로그인 없이 검색·읽기 가능 |
 | 웹 검색 | [Exa](https://exa.ai) via [mcporter](https://github.com/nicobailon/mcporter) | AI 시맨틱 검색, MCP 통합, API key 불필요 |

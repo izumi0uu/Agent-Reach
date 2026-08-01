@@ -89,10 +89,17 @@ _MAX_LIFECYCLE_GUARD_BYTES: Final = 16 * 1_024
 _MAX_YAML_NODES: Final = 8_192
 _MAX_YAML_DEPTH: Final = 32
 _MAX_ERROR_NODES: Final = 128
+_FORBIDDEN_TREE_MODE_BITS: Final = 0o7022
 _PROCESS_TIMEOUT_SECONDS: Final = 20.0
 _POLL_SECONDS: Final = 0.01
 _CLEANUP_WAIT_SECONDS: Final = 1.0
-_LIFECYCLE_GUARD_SHA256: Final = "2b58293c0301c5cde596bc370d43611f6215509f61a9a45a2efe7efadbabf6e5"
+_LIFECYCLE_GUARD_SHA256: Final = "9c9cd9bf8163fb3fba863f94a71e9ea09ea3323b84f89a06b55e3d1f19515213"
+_SINGLE_ROW_OPERATIONS: Final = frozenset(
+    {
+        ("facebook", "read.profile"),
+        ("instagram", "read.profile"),
+    }
+)
 
 _ROW_FIELDS: Final[Mapping[tuple[str, str], frozenset[str]]] = {
     ("reddit", "search.posts"): frozenset(
@@ -298,7 +305,7 @@ def execute_opencli_social(
         _execution_checkpoint(context, deadline)
         return result
     except _CheckpointRaised as raised:
-        raise raised.original
+        raise raised.original from None
     except _ArtifactUnavailableError:
         return _failure(request, "backend_unavailable")
     except _ArtifactIncompatibleError:
@@ -588,13 +595,13 @@ def _copy_tree_snapshot(
             if checkpoint is not None:
                 checkpoint()
             metadata = source.lstat()
-            if metadata.st_uid != os.getuid() or metadata.st_mode & 0o022:
+            if metadata.st_uid != os.getuid() or metadata.st_mode & _FORBIDDEN_TREE_MODE_BITS:
                 raise _ArtifactIncompatibleError("artifact tree invalid")
             destination = destination_root if name == "." else destination_root / name
             if stat.S_ISDIR(metadata.st_mode):
                 if name != ".":
                     destination.mkdir(mode=0o700)
-                directory_modes.append((destination, metadata.st_mode & 0o7777))
+                directory_modes.append((destination, metadata.st_mode & 0o777))
                 continue
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
                 raise _ArtifactIncompatibleError("artifact tree invalid")
@@ -604,7 +611,7 @@ def _copy_tree_snapshot(
                 destination,
                 maximum_bytes=remaining_budget,
                 executable=False,
-                destination_mode=metadata.st_mode & 0o7777,
+                destination_mode=metadata.st_mode & 0o777,
                 allow_empty=True,
                 checkpoint=checkpoint,
             )
@@ -705,12 +712,12 @@ def _tree_sha256(root: Path, *, checkpoint: Callable[[], None] | None = None) ->
             raise _ArtifactUnavailableError("artifact unavailable") from None
         except OSError:
             raise _ArtifactUnavailableError("artifact unavailable") from None
-        if metadata.st_uid != os.getuid() or metadata.st_mode & 0o022:
+        if metadata.st_uid != os.getuid() or metadata.st_mode & _FORBIDDEN_TREE_MODE_BITS:
             raise _ArtifactIncompatibleError("artifact tree invalid")
         digest.update(b"D" if stat.S_ISDIR(metadata.st_mode) else b"F")
         digest.update(len(encoded).to_bytes(4, "big"))
         digest.update(encoded)
-        digest.update((metadata.st_mode & 0o7777).to_bytes(2, "big"))
+        digest.update((metadata.st_mode & 0o777).to_bytes(2, "big"))
         if stat.S_ISDIR(metadata.st_mode):
             continue
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
@@ -1269,7 +1276,13 @@ def _success_rows(raw: bytes, request: ExecutionRequestV1) -> tuple[Mapping[str,
         rows.append(cast(Mapping[str, object], row))
     key = (request.source, request.operation)
     maximum = (
-        9 if key == ("reddit", "read.subreddit") else (14 if key == ("reddit", "read.post") else 50)
+        1
+        if key in _SINGLE_ROW_OPERATIONS
+        else (
+            9
+            if key == ("reddit", "read.subreddit")
+            else (14 if key == ("reddit", "read.post") else 50)
+        )
     )
     minimum = (
         1
@@ -1640,12 +1653,8 @@ def _project_instagram_posts(
 ) -> list[ExecutionItemV1]:
     explore = request.operation == "browse.explore"
     items: list[ExecutionItemV1] = []
-    seen: set[str] = set()
     for position, row in enumerate(rows, start=1):
         native_id = _ordered_row_identifier(row["rank" if explore else "index"], position)
-        if native_id in seen:
-            raise _BackendContractError("instagram result invalid")
-        seen.add(native_id)
         author = (
             _optional_text(row["user"], MAX_AUTHOR_CHARACTERS, state)
             if explore
@@ -1756,7 +1765,7 @@ def _human_count(value: object) -> int | None:
     try:
         number = Decimal(numeric)
     except InvalidOperation:
-        raise _BackendContractError("result count invalid")
+        raise _BackendContractError("result count invalid") from None
     multiplier = {
         "": 1,
         "k": 1_000,
