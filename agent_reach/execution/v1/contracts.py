@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias, cast
 from urllib.parse import urlsplit
 
 PROTOCOL_VERSION: Final = "v1"
@@ -19,6 +19,7 @@ FETCHED_DOCUMENT_CAPABILITY: Final = "fetched_document.v1"
 NETWORK_ACCESS_CAPABILITY: Final = "network_access.v1"
 PRIVATE_WORKSPACE_CAPABILITY: Final = "private_workspace.v1"
 MCPORTER_ARTIFACTS_CAPABILITY: Final = "mcporter_artifacts.v1"
+OPENCLI_SESSION_CAPABILITY: Final = "opencli_session.v1"
 
 MAX_DOCUMENT_BYTES: Final = 1_048_576
 MAX_METADATA_BYTES: Final = 16_384
@@ -43,6 +44,7 @@ _MAX_YOUTUBE_AUTHOR_CHARACTERS: Final = 1_024
 _MAX_YOUTUBE_LANGUAGE_CHARACTERS: Final = 32
 _MAX_V2EX_IDENTIFIER_CHARACTERS: Final = 64
 _MAX_EXA_OUTPUT_BYTES: Final = 512 * 1_024
+_MAX_OPENCLI_OUTPUT_BYTES: Final = 512 * 1_024
 _MAX_ARTIFACT_PATH_CHARACTERS: Final = 8_192
 
 _MAX_ARGUMENTS: Final = 8
@@ -60,6 +62,8 @@ _YOUTUBE_LANGUAGE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}")
 _YOUTUBE_SUBTITLE_MARKER: Final = "WEBVTT"
 _POSITIVE_DECIMAL: Final = re.compile(r"[1-9][0-9]{0,31}")
 _V2EX_IDENTIFIER: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+_REDDIT_POST_ID: Final = re.compile(r"[a-z0-9]{1,32}")
+_SOCIAL_USERNAME: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _SHA256: Final = re.compile(r"[0-9a-f]{64}")
 
 ExecutionErrorCodeV1 = Literal[
@@ -276,6 +280,34 @@ class McporterArtifactsV1:
 
 
 @dataclass(frozen=True, slots=True)
+class OpenCliSessionV1:
+    """Closed identities for an attested npm-prefix closure and browser session."""
+
+    node_executable: str
+    node_sha256: str
+    opencli_root: str
+    opencli_cli: str
+    opencli_tree_sha256: str
+    session_home: str
+
+    def __post_init__(self) -> None:
+        paths = (
+            self.node_executable,
+            self.opencli_root,
+            self.opencli_cli,
+            self.session_home,
+        )
+        digests = (self.node_sha256, self.opencli_tree_sha256)
+        if (
+            any(not _valid_closed_absolute_path(value) for value in paths)
+            or any(type(value) is not str or _SHA256.fullmatch(value) is None for value in digests)
+            or not Path(self.opencli_cli).is_relative_to(Path(self.opencli_root))
+            or self.opencli_cli == self.opencli_root
+        ):
+            raise ValueError("invalid opencli session")
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionLimitsV1:
     """Host-selected limits that may only narrow descriptor hard limits."""
 
@@ -293,7 +325,11 @@ class ExecutionLimitsV1:
 
 
 HostCapabilityV1: TypeAlias = (
-    FetchedDocumentV1 | NetworkAccessV1 | PrivateWorkspaceV1 | McporterArtifactsV1
+    FetchedDocumentV1
+    | NetworkAccessV1
+    | PrivateWorkspaceV1
+    | McporterArtifactsV1
+    | OpenCliSessionV1
 )
 
 
@@ -321,6 +357,7 @@ class ExecutionContextV1:
                     NetworkAccessV1,
                     PrivateWorkspaceV1,
                     McporterArtifactsV1,
+                    OpenCliSessionV1,
                 }
                 for capability in capabilities
             )
@@ -431,6 +468,113 @@ _RESULT_SCHEMA_FIELDS: Final[Mapping[str, Mapping[str, _ResultFieldRule]]] = Map
                 "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
                 "author": _text_rule(MAX_AUTHOR_CHARACTERS, nullable=True),
                 "published_at": _text_rule(MAX_PUBLISHED_CHARACTERS, nullable=True),
+            }
+        ),
+        "reddit.post.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=True),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "author": _text_rule(MAX_AUTHOR_CHARACTERS, nullable=True),
+                "published_at": _text_rule(MAX_PUBLISHED_CHARACTERS, nullable=True),
+                "score": _integer_rule(nullable=True),
+                "comment_count": _integer_rule(nullable=True),
+                "subreddit": _text_rule(64, nullable=True),
+                "media_type": _text_rule(64, nullable=True),
+            }
+        ),
+        "reddit.thread.item.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=False),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=True),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=True),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=True),
+                "author": _text_rule(MAX_AUTHOR_CHARACTERS, nullable=True),
+                "score": _integer_rule(nullable=True),
+                "kind": _text_rule(16, nullable=False),
+                "media_type": _text_rule(64, nullable=True),
+            }
+        ),
+        "reddit.subreddit.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=True),
+                "native_id": _text_rule(64, nullable=False),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "published_at": _text_rule(MAX_PUBLISHED_CHARACTERS, nullable=True),
+                "subscriber_count": _integer_rule(nullable=True),
+                "active_count": _integer_rule(nullable=True),
+                "nsfw": _integer_rule(),
+                "subreddit_type": _text_rule(64, nullable=True),
+            }
+        ),
+        "facebook.search.result.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=True),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+            }
+        ),
+        "facebook.profile.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=True),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "friend_count": _integer_rule(nullable=True),
+                "follower_count": _integer_rule(nullable=True),
+            }
+        ),
+        "facebook.post.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=False),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "author": _text_rule(MAX_AUTHOR_CHARACTERS, nullable=True),
+                "reaction_count": _integer_rule(nullable=True),
+                "comment_count": _integer_rule(nullable=True),
+                "share_count": _integer_rule(nullable=True),
+            }
+        ),
+        "facebook.group.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=True),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+            }
+        ),
+        "instagram.user.v1": MappingProxyType(
+            {
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "verified": _integer_rule(),
+                "private": _integer_rule(),
+            }
+        ),
+        "instagram.profile.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=True),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "follower_count": _integer_rule(nullable=True),
+                "following_count": _integer_rule(nullable=True),
+                "post_count": _integer_rule(nullable=True),
+                "verified": _integer_rule(),
+            }
+        ),
+        "instagram.post.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=True),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "author": _text_rule(MAX_AUTHOR_CHARACTERS, nullable=True),
+                "published_at": _text_rule(MAX_PUBLISHED_CHARACTERS, nullable=True),
+                "reaction_count": _integer_rule(nullable=True),
+                "comment_count": _integer_rule(nullable=True),
+                "media_type": _text_rule(64, nullable=True),
             }
         ),
     }
@@ -584,6 +728,141 @@ _EXPECTED_SUCCESS_CONTRACT: Final[Mapping[tuple[str, str], _ExpectedSuccessContr
                 frozenset(),
                 _MAX_EXA_OUTPUT_BYTES,
             ),
+            ("reddit", "search.posts"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("reddit.post.v1",),
+                0,
+                50,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("reddit", "read.post"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("reddit.thread.item.v1",),
+                1,
+                14,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("reddit", "browse.subreddit"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("reddit.post.v1",),
+                0,
+                50,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("reddit", "browse.hot"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("reddit.post.v1",),
+                0,
+                50,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("reddit", "browse.popular"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("reddit.post.v1",),
+                0,
+                50,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("reddit", "browse.all"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("reddit.post.v1",),
+                0,
+                50,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("reddit", "read.subreddit"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("reddit.subreddit.v1",),
+                1,
+                1,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("facebook", "search"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("facebook.search.result.v1",),
+                0,
+                50,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("facebook", "read.profile"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("facebook.profile.v1",),
+                1,
+                1,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("facebook", "browse.feed"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("facebook.post.v1",),
+                0,
+                50,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("facebook", "browse.groups"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("facebook.group.v1",),
+                0,
+                50,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("instagram", "search.users"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("instagram.user.v1",),
+                0,
+                50,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("instagram", "read.profile"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("instagram.profile.v1",),
+                1,
+                1,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("instagram", "browse.user_posts"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("instagram.post.v1",),
+                0,
+                50,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("instagram", "browse.explore"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("instagram.post.v1",),
+                0,
+                50,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
         }
     )
 )
@@ -673,6 +952,10 @@ class ExecutionSuccessV1:
             or (self.source == "youtube" and any(not _valid_youtube_item(item) for item in items))
             or (self.source == "v2ex" and any(not _valid_v2ex_item(item) for item in items))
             or (self.source == "exa" and any(not _valid_exa_item(item) for item in items))
+            or (
+                self.source in {"reddit", "facebook", "instagram"}
+                and not _valid_opencli_social_result((self.source, self.operation), items)
+            )
             or _result_payload_size(items) > maximum_output_bytes
         ):
             raise ValueError("invalid execution success")
@@ -951,6 +1234,130 @@ def _valid_v2ex_timestamp(value: object) -> bool:
         and parsed.year >= 1970
         and parsed.isoformat() == value
     )
+
+
+def _valid_opencli_social_result(
+    key: tuple[str, str],
+    items: tuple[ExecutionItemV1, ...],
+) -> bool:
+    if key == ("reddit", "read.post"):
+        if not items or items[0].fields.get("kind") != "post":
+            return False
+        first = items[0]
+        native_id = first.fields.get("native_id")
+        return bool(
+            type(native_id) is str
+            and _REDDIT_POST_ID.fullmatch(native_id)
+            and _reddit_post_id_from_url(first.fields.get("url")) == native_id
+            and all(
+                item.fields.get("kind") == "comment"
+                and item.fields.get("native_id") is None
+                and item.fields.get("title") is None
+                and item.fields.get("url") is None
+                for item in items[1:]
+            )
+        )
+    if key == ("reddit", "read.subreddit"):
+        if len(items) != 1:
+            return False
+        item = items[0]
+        native_id = item.fields.get("native_id")
+        return bool(
+            type(native_id) is str
+            and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{2,20}", native_id)
+            and item.fields.get("url") == f"https://www.reddit.com/r/{native_id}/"
+            and item.fields.get("nsfw") in {0, 1}
+        )
+    if key[0] == "reddit":
+        return all(
+            type(item.fields.get("native_id")) is str
+            and _REDDIT_POST_ID.fullmatch(cast(str, item.fields["native_id"]))
+            and _reddit_post_id_from_url(item.fields.get("url")) == item.fields.get("native_id")
+            for item in items
+        )
+    if key == ("facebook", "read.profile"):
+        return len(items) == 1 and _valid_social_profile_item(items[0], "facebook.com")
+    if key in {("facebook", "search"), ("facebook", "browse.groups")}:
+        return all(
+            _valid_hosted_public_url(item.fields.get("url"), "facebook.com") for item in items
+        )
+    if key == ("instagram", "read.profile"):
+        return bool(
+            len(items) == 1
+            and _valid_social_profile_item(items[0], "instagram.com")
+            and items[0].fields.get("verified") in {0, 1}
+        )
+    if key == ("instagram", "search.users"):
+        return all(
+            _valid_social_profile_item(item, "instagram.com")
+            and item.fields.get("verified") in {0, 1}
+            and item.fields.get("private") in {0, 1}
+            for item in items
+        )
+    return key in {
+        ("facebook", "browse.feed"),
+        ("instagram", "browse.user_posts"),
+        ("instagram", "browse.explore"),
+    }
+
+
+def _valid_social_profile_item(item: ExecutionItemV1, host: str) -> bool:
+    native_id = item.fields.get("native_id")
+    return bool(
+        type(native_id) is str
+        and _SOCIAL_USERNAME.fullmatch(native_id)
+        and _valid_hosted_public_url(item.fields.get("url"), host)
+    )
+
+
+def _valid_hosted_public_url(value: object, suffix: str) -> bool:
+    if not _valid_public_result_url(value):
+        return False
+    try:
+        host = urlsplit(cast(str, value)).hostname
+    except (UnicodeError, ValueError):
+        return False
+    return bool(host == suffix or (type(host) is str and host.endswith(f".{suffix}")))
+
+
+def _reddit_post_identity_from_url(value: object) -> tuple[str, str] | None:
+    if type(value) is not str or not value.isascii() or len(value) > 512:
+        return None
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except (UnicodeError, ValueError):
+        return None
+    host = parsed.hostname
+    if (
+        parsed.scheme != "https"
+        or type(host) is not str
+        or host not in {"reddit.com", "www.reddit.com"}
+        or port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    normalized_path = parsed.path[:-1] if parsed.path.endswith("/") else parsed.path
+    parts = normalized_path.split("/")
+    if (
+        len(parts) not in {5, 6}
+        or parts[0] != ""
+        or parts[1] != "r"
+        or parts[3] != "comments"
+        or re.fullmatch(r"[A-Za-z0-9_]{1,32}", parts[2]) is None
+        or _REDDIT_POST_ID.fullmatch(parts[4].lower()) is None
+        or (len(parts) == 6 and re.fullmatch(r"[A-Za-z0-9_-]{1,256}", parts[5]) is None)
+    ):
+        return None
+    return parts[2], parts[4].lower()
+
+
+def _reddit_post_id_from_url(value: object) -> str | None:
+    identity = _reddit_post_identity_from_url(value)
+    return None if identity is None else identity[1]
 
 
 def _valid_exa_item(item: ExecutionItemV1) -> bool:

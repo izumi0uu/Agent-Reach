@@ -19,6 +19,7 @@ from agent_reach.execution.v1 import (
     FETCHED_DOCUMENT_CAPABILITY,
     MCPORTER_ARTIFACTS_CAPABILITY,
     NETWORK_ACCESS_CAPABILITY,
+    OPENCLI_SESSION_CAPABILITY,
     PRIVATE_WORKSPACE_CAPABILITY,
     PROTOCOL_VERSION,
     ExecutionContextV1,
@@ -30,6 +31,7 @@ from agent_reach.execution.v1 import (
     FetchedDocumentV1,
     McporterArtifactsV1,
     NetworkAccessV1,
+    OpenCliSessionV1,
     PrivateWorkspaceV1,
     execute,
     list_capabilities,
@@ -200,6 +202,17 @@ def _mcporter_artifacts(root: Path) -> McporterArtifactsV1:
     )
 
 
+def _opencli_session(root: Path) -> OpenCliSessionV1:
+    return OpenCliSessionV1(
+        node_executable=str(root / "node"),
+        node_sha256="a" * 64,
+        opencli_root=str(root / "opencli"),
+        opencli_cli=str(root / "opencli" / "dist" / "src" / "main.js"),
+        opencli_tree_sha256="b" * 64,
+        session_home=str(root / "session"),
+    )
+
+
 def test_capability_discovery_is_static_closed_and_io_free(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -352,6 +365,34 @@ def test_capability_discovery_is_static_closed_and_io_free(
             "0.12.3+exa-web.v1",
             (NETWORK_ACCESS_CAPABILITY, MCPORTER_ARTIFACTS_CAPABILITY),
         ),
+        *[
+            (
+                source,
+                operation,
+                f"{source}.{operation}.arguments.v1",
+                (schema,),
+                "opencli",
+                "1.8.6-hermes.1",
+                (OPENCLI_SESSION_CAPABILITY,),
+            )
+            for source, operation, schema in (
+                ("reddit", "search.posts", "reddit.post.v1"),
+                ("reddit", "read.post", "reddit.thread.item.v1"),
+                ("reddit", "browse.subreddit", "reddit.post.v1"),
+                ("reddit", "browse.hot", "reddit.post.v1"),
+                ("reddit", "browse.popular", "reddit.post.v1"),
+                ("reddit", "browse.all", "reddit.post.v1"),
+                ("reddit", "read.subreddit", "reddit.subreddit.v1"),
+                ("facebook", "search", "facebook.search.result.v1"),
+                ("facebook", "read.profile", "facebook.profile.v1"),
+                ("facebook", "browse.feed", "facebook.post.v1"),
+                ("facebook", "browse.groups", "facebook.group.v1"),
+                ("instagram", "search.users", "instagram.user.v1"),
+                ("instagram", "read.profile", "instagram.profile.v1"),
+                ("instagram", "browse.user_posts", "instagram.post.v1"),
+                ("instagram", "browse.explore", "instagram.post.v1"),
+            )
+        ],
     ]
     assert all(item.protocol_version == PROTOCOL_VERSION for item in capabilities)
     assert [item.maximum_items for item in capabilities] == [
@@ -369,24 +410,31 @@ def test_capability_discovery_is_static_closed_and_io_free(
         21,
         1,
         20,
+        50,
+        14,
+        50,
+        50,
+        50,
+        50,
+        1,
+        50,
+        1,
+        50,
+        50,
+        50,
+        1,
+        50,
+        50,
     ]
     assert all(item.maximum_document_bytes == 1_048_576 for item in capabilities)
     assert all(item.maximum_metadata_bytes == 16_384 for item in capabilities)
     assert [item.maximum_output_bytes for item in capabilities] == [
         1_048_576,
         1_048_576,
+        *([524_288] * 7),
+        *([1_048_576] * 4),
         524_288,
-        524_288,
-        524_288,
-        524_288,
-        524_288,
-        524_288,
-        524_288,
-        1_048_576,
-        1_048_576,
-        1_048_576,
-        1_048_576,
-        524_288,
+        *([524_288] * 15),
     ]
     assert all(item.maximum_content_type_characters == 512 for item in capabilities)
     assert all(item.maximum_content_location_characters == 8_192 for item in capabilities)
@@ -397,18 +445,9 @@ def test_capability_discovery_is_static_closed_and_io_free(
     assert [item.maximum_author_characters for item in capabilities] == [
         2_048,
         2_048,
-        1_024,
-        1_024,
-        1_024,
-        1_024,
-        1_024,
-        1_024,
-        1_024,
-        2_048,
-        2_048,
-        2_048,
-        2_048,
-        2_048,
+        *([1_024] * 7),
+        *([2_048] * 5),
+        *([2_048] * 15),
     ]
     assert all(item.maximum_published_characters == 512 for item in capabilities)
     with pytest.raises(FrozenInstanceError):
@@ -425,7 +464,7 @@ def denied_home(cls):
     raise AssertionError('ambient home access')
 pathlib.Path.home = classmethod(denied_home)
 from agent_reach.execution.v1 import list_capabilities
-assert len(list_capabilities()) == 14
+assert len(list_capabilities()) == 29
 assert 'feedparser' not in sys.modules
 assert not any(name == 'bili_cli' or name.startswith('bili_cli.') for name in sys.modules)
 assert not any(name == 'yt_dlp' or name.startswith('yt_dlp.') for name in sys.modules)
@@ -437,6 +476,7 @@ assert 'agent_reach.execution.v1.youtube' not in sys.modules
 assert 'agent_reach.execution.v1.v2ex' not in sys.modules
 assert 'agent_reach.execution.v1._v2ex_transport' not in sys.modules
 assert 'agent_reach.execution.v1.exa' not in sys.modules
+assert 'agent_reach.execution.v1.opencli_social' not in sys.modules
 assert 'httpcore' not in sys.modules
 assert 'agent_reach.config' not in sys.modules
 """
@@ -555,6 +595,32 @@ def test_private_workspace_and_mcporter_capabilities_are_closed_and_immutable(
     context = ExecutionContextV1(supplied)  # type: ignore[arg-type]
     supplied.clear()
     assert context.host_capabilities == (NetworkAccessV1(), artifacts)
+
+
+def test_opencli_session_capability_is_closed_and_immutable(tmp_path: Path) -> None:
+    session = _opencli_session(tmp_path)
+
+    assert tuple(field.name for field in fields(session)) == (
+        "node_executable",
+        "node_sha256",
+        "opencli_root",
+        "opencli_cli",
+        "opencli_tree_sha256",
+        "session_home",
+    )
+    assert not hasattr(session, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        session.node_sha256 = "c" * 64  # type: ignore[misc]
+    assert ExecutionContextV1((session,)).host_capabilities == (session,)
+    with pytest.raises(ValueError):
+        OpenCliSessionV1(
+            node_executable="node",
+            node_sha256="a" * 64,
+            opencli_root=str(tmp_path / "opencli"),
+            opencli_cli=str(tmp_path / "outside.js"),
+            opencli_tree_sha256="b" * 64,
+            session_home=str(tmp_path / "session"),
+        )
 
 
 def test_mcporter_artifacts_reject_noncanonical_paths_and_digest_drift(tmp_path: Path) -> None:

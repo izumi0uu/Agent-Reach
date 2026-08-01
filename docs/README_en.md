@@ -235,13 +235,18 @@ Every time you spin up a new Agent, you spend time finding tools, installing dep
 
 ### Structured execution API for host integrations
 
-`agent_reach.execution.v1` exposes fourteen closed operations: two RSS, four
-Bilibili, three YouTube, four V2EX, and Exa Web search. Each operation has a
-fixed backend contract and accepts only typed host capabilities. It cannot
+`agent_reach.execution.v1` exposes twenty-nine closed operations: the existing
+RSS, Bilibili, YouTube, V2EX, and Exa operations plus seven Reddit,
+four Facebook, and four Instagram operations. The fifteen social operations
+accept only an operator-attested `OpenCliSessionV1`, pin
+`@jackwener/opencli@1.8.6-hermes.1`, and run with a private per-attempt HOME while
+pointing `OPENCLI_CONFIG_DIR` at the trusted device's existing browser-session
+configuration. Each descriptor fixes its command and schema; callers cannot
 select commands, argv, endpoints, MCP methods, proxies, Cookies, credentials,
-browsers, output paths, plugins, remote components, or fallbacks. The embedding
-host still owns authorization, private process state, hard cancellation,
-bounded framing, independent result validation, and audit. See the
+browsers/profiles, output paths, plugins, remote components, or fallbacks. This
+is not an OS sandbox: the embedding host still owns authorization, trusted
+device isolation, hard cancellation, independent result validation, and audit.
+See the
 [execution v1 guide](execution-v1.md).
 
 ### 🔌 Every platform = an ordered backend list (primary + fallbacks)

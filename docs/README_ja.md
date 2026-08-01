@@ -195,9 +195,13 @@ Agent Reach はシンプルなことを1つだけ行います：**ツールの�
 
 ### ホスト統合向け構造化実行 API
 
-`agent_reach.execution.v1` は、RSS 2件、Bilibili 4件、YouTube 3件、
-V2EX 4件、Exa Web 検索1件の合計14件の閉じた操作を提供します。各操作は
-固定された backend contract と型付き host capability だけを受け取ります。
+`agent_reach.execution.v1` は、既存の RSS、Bilibili、YouTube、V2EX、
+Exa の操作に、Reddit 7件、Facebook 4件、Instagram 4件を加えた合計29件の
+閉じた操作を提供します。追加された15件は `@jackwener/opencli@1.8.6-hermes.1` と
+operator-attested `OpenCliSessionV1` に固定され、実行ごとに private HOME を
+使用しながら、信頼済み端末の既存 browser-session 設定だけを
+`OPENCLI_CONFIG_DIR` 経由で参照します。各操作は固定された backend contract
+と型付き host capability だけを受け取ります。
 コマンド、argv、endpoint、MCP method、proxy、Cookie、資格情報、browser、
 出力先、plugin、remote component、fallback は選択できません。認可、
 非公開のプロセス状態、強制キャンセル、有界 framing、独立した結果検証、
