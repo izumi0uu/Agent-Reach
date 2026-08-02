@@ -594,6 +594,76 @@ def _operation_cases() -> tuple[_OperationCase, ...]:
                 },
             ),
         ),
+        _OperationCase(
+            "twitter",
+            "search.posts",
+            {"query": QUERY_CANARY, "limit": 3},
+            ("twitter", "search", QUERY_CANARY, "--limit", "3"),
+            (
+                {
+                    "id": "1951234567890123456",
+                    "author": " Alice ",
+                    "bio": " Builder ",
+                    "text": " Post\n body ",
+                    "created_at": "2026-08-02T00:00:00Z",
+                    "likes": "12",
+                    "views": 345,
+                    "url": "https://x.com/alice/status/1951234567890123456",
+                    "has_media": False,
+                    "media_urls": [],
+                    "media_posters": [],
+                    "card": None,
+                    "quoted_tweet": None,
+                },
+            ),
+            ("twitter.post.v1",),
+            (
+                {
+                    "text": "Post body",
+                    "native_id": "1951234567890123456",
+                    "url": "https://x.com/i/status/1951234567890123456",
+                    "author": "Alice",
+                    "published_at": "2026-08-02T00:00:00Z",
+                    "reaction_count": 12,
+                    "view_count": 345,
+                    "has_media": 0,
+                },
+            ),
+        ),
+        _OperationCase(
+            "xiaohongshu",
+            "search.notes",
+            {"query": QUERY_CANARY, "limit": 3},
+            ("xiaohongshu", "search", QUERY_CANARY, "--limit", "3"),
+            (
+                {
+                    "rank": 1,
+                    "title": " Agent\n runtime ",
+                    "author": " Alice ",
+                    "likes": "1.2万",
+                    "published_at": "2026-08-02",
+                    "url": (
+                        "https://www.xiaohongshu.com/explore/"
+                        "64f0123456789abcdef01234?xsec_token=SECRET&xsec_source=pc_search"
+                    ),
+                    "author_url": (
+                        "https://www.xiaohongshu.com/user/profile/abc?xsec_token=SECRET"
+                    ),
+                },
+            ),
+            ("xiaohongshu.note.v1",),
+            (
+                {
+                    "text": "Agent runtime",
+                    "native_id": "64f0123456789abcdef01234",
+                    "title": "Agent runtime",
+                    "url": ("https://www.xiaohongshu.com/explore/64f0123456789abcdef01234"),
+                    "author": "Alice",
+                    "published_at": "2026-08-02",
+                    "reaction_count": 12_000,
+                },
+            ),
+        ),
     )
 
 
@@ -602,7 +672,7 @@ def _operation_cases() -> tuple[_OperationCase, ...]:
     _operation_cases(),
     ids=lambda case: f"{case.source}-{case.operation}",
 )
-def test_all_fifteen_operations_use_fixed_argv_and_closed_projection(
+def test_all_seventeen_operations_use_fixed_argv_and_closed_projection(
     case: _OperationCase,
     closure: _Closure,
     monkeypatch: pytest.MonkeyPatch,
@@ -689,6 +759,8 @@ def test_all_fifteen_operations_use_fixed_argv_and_closed_projection(
         ("instagram", "read.profile", {"username": "alice dev"}),
         ("instagram", "browse.user_posts", {"username": "@alice", "limit": 1}),
         ("instagram", "browse.explore", {"limit": 1, "scope": "account_visible"}),
+        ("twitter", "search.posts", {"query": " padded ", "limit": 1}),
+        ("xiaohongshu", "search.notes", {"query": QUERY_CANARY, "limit": 0}),
     ],
 )
 def test_each_operation_rejects_non_closed_arguments_before_backend_import(
@@ -714,6 +786,124 @@ def test_each_operation_rejects_non_closed_arguments_before_backend_import(
     assert result.error_code == "invalid_request"
     assert result.backend_id is None
     assert spawns == 0
+
+
+@pytest.mark.parametrize(
+    ("source", "operation", "mutation"),
+    [
+        ("twitter", "search.posts", "id-url-mismatch"),
+        ("twitter", "search.posts", "url-query"),
+        ("twitter", "search.posts", "non-boolean-media"),
+        ("twitter", "search.posts", "unsafe-media-url"),
+        ("twitter", "search.posts", "missing-native-field"),
+        ("twitter", "search.posts", "duplicate-id"),
+        ("xiaohongshu", "search.notes", "rank-mismatch"),
+        ("xiaohongshu", "search.notes", "wrong-note-host"),
+        ("xiaohongshu", "search.notes", "wrong-author-host"),
+        ("xiaohongshu", "search.notes", "session-field"),
+        ("xiaohongshu", "search.notes", "duplicate-id"),
+    ],
+)
+def test_new_search_native_drift_fails_closed(
+    source: str,
+    operation: str,
+    mutation: str,
+    closure: _Closure,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = next(
+        candidate
+        for candidate in _operation_cases()
+        if (candidate.source, candidate.operation) == (source, operation)
+    )
+    row = dict(case.rows[0])
+    rows: tuple[Mapping[str, object], ...] = (row,)
+
+    if mutation == "id-url-mismatch":
+        row["id"] = "1951234567890123457"
+    elif mutation == "url-query":
+        row["url"] = f"{row['url']}?session=SECRET"
+    elif mutation == "non-boolean-media":
+        row["has_media"] = 1
+    elif mutation == "unsafe-media-url":
+        row["media_urls"] = ["javascript:SECRET"]
+    elif mutation == "missing-native-field":
+        del row["bio"]
+    elif mutation == "rank-mismatch":
+        row["rank"] = 2
+    elif mutation == "wrong-note-host":
+        row["url"] = "https://example.com/explore/64f0123456789abcdef01234"
+    elif mutation == "wrong-author-host":
+        row["author_url"] = "https://example.com/user/profile/abc?xsec_token=SECRET"
+    elif mutation == "session-field":
+        row["xsec_token"] = "SECRET"
+    elif mutation == "duplicate-id":
+        rows = (row, dict(row))
+    else:  # pragma: no cover - the parameter table is exhaustive
+        raise AssertionError("unknown mutation")
+
+    monkeypatch.setattr(
+        opencli,
+        "_run_process",
+        lambda *_args, **_kwargs: (0, _yaml(rows), b""),
+    )
+    monkeypatch.chdir(closure.root.parent)
+
+    result = execute(
+        _request(source, operation, case.arguments),
+        _context(closure.capability()),
+    )
+
+    failure = _assert_failure(result, "backend_contract_violation")
+    assert "SECRET" not in repr(failure)
+
+
+@pytest.mark.parametrize(
+    ("source", "operation", "backend_code", "return_code", "expected"),
+    [
+        ("twitter", "search.posts", "LOGIN_WALL", 77, "authentication"),
+        ("xiaohongshu", "search.notes", "RATE_LIMIT", 75, "rate_limit"),
+    ],
+)
+def test_new_search_closed_backend_errors(
+    source: str,
+    operation: str,
+    backend_code: str,
+    return_code: int,
+    expected: str,
+    closure: _Closure,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    case = next(
+        candidate
+        for candidate in _operation_cases()
+        if (candidate.source, candidate.operation) == (source, operation)
+    )
+    stderr = _yaml(
+        {
+            "ok": False,
+            "error": {
+                "code": backend_code,
+                "exitCode": return_code,
+                "message": f"{QUERY_CANARY} SECRET",
+            },
+        }
+    )
+    monkeypatch.setattr(
+        opencli,
+        "_run_process",
+        lambda *_args, **_kwargs: (return_code, b"", stderr),
+    )
+    monkeypatch.chdir(closure.root.parent)
+
+    result = execute(
+        _request(source, operation, case.arguments),
+        _context(closure.capability()),
+    )
+
+    failure = _assert_failure(result, expected)
+    assert backend_code not in repr(failure)
+    assert "SECRET" not in repr(failure)
 
 
 def test_opencli_capability_is_exact_and_caller_limits_only_narrow(

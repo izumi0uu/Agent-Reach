@@ -18,6 +18,7 @@ from .contracts import (
     _SUBREDDIT_IDENTIFIER,
     _YOUTUBE_SUBTITLE_MARKER,
     FETCHED_DOCUMENT_CAPABILITY,
+    LINKEDIN_MCP_CAPABILITY,
     MAX_AUTHOR_CHARACTERS,
     MAX_CONTENT_LOCATION_CHARACTERS,
     MAX_CONTENT_TYPE_CHARACTERS,
@@ -34,6 +35,7 @@ from .contracts import (
     OPENCLI_SESSION_CAPABILITY,
     PRIVATE_WORKSPACE_CAPABILITY,
     PROTOCOL_VERSION,
+    XUEQIU_SESSION_CAPABILITY,
     ExecutionContextV1,
     ExecutionErrorCodeV1,
     ExecutionFailureV1,
@@ -41,11 +43,13 @@ from .contracts import (
     ExecutionResultV1,
     FetchedDocumentV1,
     HostCapabilityV1,
+    LinkedInMcpV1,
     McporterArtifactsV1,
     NetworkAccessV1,
     OpenCliSessionV1,
     OperationCapabilityV1,
     PrivateWorkspaceV1,
+    XueqiuSessionV1,
     _reddit_post_id_from_url,
     _valid_bilibili_video_url,
     _valid_youtube_video_url,
@@ -377,6 +381,72 @@ _CAPABILITIES: Final = (
         result_schema_id="instagram.post.v1",
         maximum_items=50,
     ),
+    _opencli_capability(
+        source="twitter",
+        operation="search.posts",
+        argument_schema_id="twitter.search.posts.arguments.v1",
+        result_schema_id="twitter.post.v1",
+        maximum_items=50,
+    ),
+    _opencli_capability(
+        source="xiaohongshu",
+        operation="search.notes",
+        argument_schema_id="xiaohongshu.search.notes.arguments.v1",
+        result_schema_id="xiaohongshu.note.v1",
+        maximum_items=50,
+    ),
+    _capability(
+        source="linkedin",
+        operation="search.people",
+        argument_schema_id="linkedin.search.people.arguments.v1",
+        result_schema_ids=("linkedin.people.search.document.v1",),
+        backend_id="linkedin-scraper-mcp",
+        backend_version="4.14.0",
+        required_host_capabilities=(
+            MCPORTER_ARTIFACTS_CAPABILITY,
+            LINKEDIN_MCP_CAPABILITY,
+        ),
+        maximum_items=1,
+        maximum_output_bytes=_MAX_EXA_OUTPUT_BYTES,
+    ),
+    _capability(
+        source="linkedin",
+        operation="search.jobs",
+        argument_schema_id="linkedin.search.jobs.arguments.v1",
+        result_schema_ids=("linkedin.jobs.search.document.v1",),
+        backend_id="linkedin-scraper-mcp",
+        backend_version="4.14.0",
+        required_host_capabilities=(
+            MCPORTER_ARTIFACTS_CAPABILITY,
+            LINKEDIN_MCP_CAPABILITY,
+        ),
+        maximum_items=1,
+        maximum_output_bytes=_MAX_EXA_OUTPUT_BYTES,
+    ),
+    _capability(
+        source="xueqiu",
+        operation="search.stocks",
+        argument_schema_id="xueqiu.search.stocks.arguments.v1",
+        result_schema_ids=("xueqiu.stock.v1",),
+        backend_id="xueqiu-api",
+        backend_version="1.5.0+search.v1",
+        required_host_capabilities=(XUEQIU_SESSION_CAPABILITY,),
+        maximum_items=50,
+    ),
+    _capability(
+        source="exa",
+        operation="search.code",
+        argument_schema_id="exa.search.code.arguments.v1",
+        result_schema_ids=("exa.code.result.v1",),
+        backend_id="exa-mcporter",
+        backend_version="0.12.3+exa-code.v1",
+        required_host_capabilities=(
+            NETWORK_ACCESS_CAPABILITY,
+            MCPORTER_ARTIFACTS_CAPABILITY,
+        ),
+        maximum_items=20,
+        maximum_output_bytes=_MAX_EXA_OUTPUT_BYTES,
+    ),
 )
 _CAPABILITY_BY_OPERATION: Final = MappingProxyType(
     {(capability.source, capability.operation): capability for capability in _CAPABILITIES}
@@ -395,6 +465,19 @@ def execute(
     context: ExecutionContextV1,
 ) -> ExecutionResultV1:
     """Validate a closed request and invoke its fixed registered executor."""
+
+    host_capabilities = context.host_capabilities if type(context) is ExecutionContextV1 else ()
+    try:
+        return _execute(request, context)
+    finally:
+        _close_consumable_capabilities(host_capabilities)
+
+
+def _execute(
+    request: ExecutionRequestV1,
+    context: ExecutionContextV1,
+) -> ExecutionResultV1:
+    """Execute after installing the top-level consumable-capability cleanup."""
 
     if type(request) is not ExecutionRequestV1:
         return _failure(None, "invalid_request")
@@ -448,10 +531,24 @@ def execute(
         from .exa import execute_exa
 
         return execute_exa(request, context)
-    if request.source in {"reddit", "facebook", "instagram"}:
+    if request.source in {
+        "reddit",
+        "facebook",
+        "instagram",
+        "twitter",
+        "xiaohongshu",
+    }:
         from .opencli_social import execute_opencli_social
 
         return execute_opencli_social(request, context)
+    if request.source == "linkedin":
+        from .linkedin import execute_linkedin
+
+        return execute_linkedin(request, context)
+    if request.source == "xueqiu":
+        from .xueqiu import execute_xueqiu
+
+        return execute_xueqiu(request, context)
     return _failure(request, "unsupported_source")
 
 
@@ -545,13 +642,25 @@ def _valid_arguments(
         )
     if key == ("v2ex", "read.user") and set(arguments) == {"username"}:
         return _valid_v2ex_identifier(arguments["username"])
-    if key == ("exa", "search.web") and set(arguments) == {"query", "limit"}:
+    if key in {("exa", "search.web"), ("exa", "search.code")} and set(arguments) == {
+        "query",
+        "limit",
+    }:
         return _valid_query_and_limit(arguments, maximum_limit=50)
     if key in {
         ("reddit", "search.posts"),
         ("facebook", "search"),
         ("instagram", "search.users"),
+        ("twitter", "search.posts"),
+        ("xiaohongshu", "search.notes"),
     } and set(arguments) == {"query", "limit"}:
+        return _valid_query_and_limit(arguments, maximum_limit=capability.maximum_items)
+    if key in {
+        ("linkedin", "search.people"),
+        ("linkedin", "search.jobs"),
+    } and set(arguments) == {"query", "limit"}:
+        return _valid_query_and_limit(arguments, maximum_limit=50)
+    if key == ("xueqiu", "search.stocks") and set(arguments) == {"query", "limit"}:
         return _valid_query_and_limit(arguments, maximum_limit=capability.maximum_items)
     if key == ("reddit", "read.post") and set(arguments) == {"url"}:
         return _reddit_post_id_from_url(arguments["url"]) is not None
@@ -648,4 +757,16 @@ def _host_capability_id(capability: HostCapabilityV1) -> str:
         return MCPORTER_ARTIFACTS_CAPABILITY
     if type(capability) is OpenCliSessionV1:
         return OPENCLI_SESSION_CAPABILITY
+    if type(capability) is LinkedInMcpV1:
+        return LINKEDIN_MCP_CAPABILITY
+    if type(capability) is XueqiuSessionV1:
+        return XUEQIU_SESSION_CAPABILITY
     raise AssertionError("unreachable host capability")
+
+
+def _close_consumable_capabilities(
+    host_capabilities: tuple[HostCapabilityV1, ...],
+) -> None:
+    for capability in host_capabilities:
+        if type(capability) is XueqiuSessionV1:
+            capability.close()

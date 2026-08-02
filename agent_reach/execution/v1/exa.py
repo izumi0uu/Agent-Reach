@@ -1,4 +1,4 @@
-"""Fork-owned Exa Web search through one fixed mcporter invocation."""
+"""Fork-owned Exa Web and Code search through fixed mcporter invocations."""
 
 from __future__ import annotations
 
@@ -37,10 +37,13 @@ from .contracts import (
 )
 
 _BACKEND_ID: Final = "exa-mcporter"
-_BACKEND_VERSION: Final = "0.12.3+exa-web.v1"
 _MCPORTER_VERSION: Final = "0.12.3"
-_ENDPOINT: Final = "https://mcp.exa.ai/mcp"
-_TOOL: Final = "web_search_exa"
+_WEB_BACKEND_VERSION: Final = "0.12.3+exa-web.v1"
+_CODE_BACKEND_VERSION: Final = "0.12.3+exa-code.v1"
+_WEB_ENDPOINT: Final = "https://mcp.exa.ai/mcp"
+_CODE_ENDPOINT: Final = "https://mcp.exa.ai/mcp?tools=get_code_context_exa"
+_WEB_TOOL: Final = "web_search_exa"
+_CODE_TOOL: Final = "get_code_context_exa"
 _STERILE_CONFIG: Final = b'{"imports":[],"mcpServers":{}}'
 _NO_RESULTS: Final = "No search results found. Please try a different query."
 _BLOCK_SEPARATOR: Final = "\n\n---\n\n"
@@ -98,7 +101,7 @@ def execute_exa(
     request: ExecutionRequestV1,
     context: ExecutionContextV1,
 ) -> ExecutionResultV1:
-    """Execute one registry-validated Exa Web request."""
+    """Execute one registry-validated Exa search request."""
 
     if not _valid_request(request):
         return _failure(request, "backend_contract_violation")
@@ -130,7 +133,7 @@ def _valid_request(request: ExecutionRequestV1) -> bool:
         type(request) is not ExecutionRequestV1
         or request.protocol_version != PROTOCOL_VERSION
         or request.source != "exa"
-        or request.operation != "search.web"
+        or request.operation not in {"search.web", "search.code"}
         or set(request.arguments) != {"query", "limit"}
     ):
         return False
@@ -157,6 +160,8 @@ def _artifacts_from_context(context: ExecutionContextV1) -> McporterArtifactsV1 
 
 def _validate_artifacts(
     artifacts: McporterArtifactsV1,
+    *,
+    expected_config: bytes = _STERILE_CONFIG,
 ) -> tuple[Path, Path, Path]:
     node = _canonical_existing_path(artifacts.node_executable, kind="file")
     root = _canonical_existing_path(artifacts.mcporter_root, kind="directory")
@@ -175,9 +180,9 @@ def _validate_artifacts(
     if _mcporter_tree_digest(root) != artifacts.mcporter_tree_sha256:
         raise _ArtifactIncompatibleError("artifact identity invalid")
     _validate_package_identity(cli)
-    config_bytes = _read_file(config, maximum_bytes=len(_STERILE_CONFIG))
+    config_bytes = _read_file(config, maximum_bytes=len(expected_config))
     if (
-        config_bytes != _STERILE_CONFIG
+        config_bytes != expected_config
         or hashlib.sha256(config_bytes).hexdigest() != artifacts.config_sha256
     ):
         raise _ArtifactIncompatibleError("artifact identity invalid")
@@ -471,7 +476,7 @@ def _invoke_mcporter(
                 # Revalidate the complete operator-attested closure immediately
                 # before composing the sole fixed provider process.
                 node, cli, config = _validate_artifacts(artifacts)
-                argv = _mcporter_argv(node, cli, config)
+                argv = _mcporter_argv(node, cli, config, operation=request.operation)
                 _checkpoint(context)
                 try:
                     process = subprocess.Popen(
@@ -494,20 +499,28 @@ def _invoke_mcporter(
                 )
                 try:
                     text = _mcp_text(stdout)
-                    items, text_truncated = _project_web_results(
-                        text,
-                        maximum_items=limit,
-                        maximum_text=min(
-                            context.limits.maximum_text_characters,
-                            MAX_TEXT_CHARACTERS,
-                        ),
+                    maximum_text = min(
+                        context.limits.maximum_text_characters,
+                        MAX_TEXT_CHARACTERS,
                     )
+                    if request.operation == "search.web":
+                        items, text_truncated = _project_web_results(
+                            text,
+                            maximum_items=limit,
+                            maximum_text=maximum_text,
+                        )
+                    else:
+                        items, text_truncated = _project_code_results(
+                            text,
+                            maximum_items=limit,
+                            maximum_text=maximum_text,
+                        )
                     return ExecutionSuccessV1(
                         PROTOCOL_VERSION,
                         "exa",
-                        "search.web",
+                        request.operation,
                         _BACKEND_ID,
-                        _BACKEND_VERSION,
+                        _backend_version(request.operation),
                         items,
                         truncated=_request_was_narrowed(request, limit) or text_truncated,
                     )
@@ -527,7 +540,21 @@ def _invoke_mcporter(
         payload[:] = b"\x00" * len(payload)
 
 
-def _mcporter_argv(node: Path, cli: Path, config: Path) -> tuple[str, ...]:
+def _mcporter_argv(
+    node: Path,
+    cli: Path,
+    config: Path,
+    *,
+    operation: str,
+) -> tuple[str, ...]:
+    if operation == "search.web":
+        endpoint = _WEB_ENDPOINT
+        tool = _WEB_TOOL
+    elif operation == "search.code":
+        endpoint = _CODE_ENDPOINT
+        tool = _CODE_TOOL
+    else:
+        raise _BackendContractError("request invalid")
     return (
         str(node),
         str(cli),
@@ -537,11 +564,11 @@ def _mcporter_argv(node: Path, cli: Path, config: Path) -> tuple[str, ...]:
         "error",
         "call",
         "--http-url",
-        _ENDPOINT,
+        endpoint,
         "--name",
         "exa",
         "--tool",
-        _TOOL,
+        tool,
         "--args",
         "-",
         "--output",
@@ -903,6 +930,60 @@ def _project_web_block(
     return item, truncated
 
 
+def _project_code_results(
+    text: str,
+    *,
+    maximum_items: int,
+    maximum_text: int,
+) -> tuple[tuple[ExecutionItemV1, ...], bool]:
+    if text == _NO_RESULTS:
+        return (), False
+    if "\r" in text or text != text.strip():
+        raise _BackendContractError("backend text invalid")
+    blocks = text.split(_BLOCK_SEPARATOR)
+    if not blocks or len(blocks) > maximum_items:
+        raise _BackendContractError("backend text invalid")
+    projected = tuple(_project_code_block(block, maximum_text) for block in blocks)
+    return tuple(item for item, _ in projected), any(truncated for _, truncated in projected)
+
+
+def _project_code_block(
+    block: str,
+    maximum_text: int,
+) -> tuple[ExecutionItemV1, bool]:
+    lines = block.split("\n")
+    if len(lines) < 3:
+        raise _BackendContractError("backend text invalid")
+    title = _label_value(lines[0], "Title: ", MAX_TITLE_CHARACTERS)
+    url = _label_value(lines[1], "URL: ", MAX_URL_CHARACTERS)
+    if not _valid_public_result_url(url):
+        raise _BackendContractError("backend url invalid")
+
+    if lines[2] == "Code/Highlights:":
+        if len(lines) < 4:
+            raise _BackendContractError("backend text invalid")
+        body = "\n".join(lines[3:])
+    elif lines[2].startswith("Text: "):
+        body = "\n".join((lines[2][len("Text: ") :], *lines[3:]))
+    else:
+        raise _BackendContractError("backend text invalid")
+    normalized = " ".join(body.split())
+    if not normalized or _contains_invalid_scalar(normalized):
+        raise _BackendContractError("backend text invalid")
+    truncated = len(normalized) > maximum_text
+    return (
+        ExecutionItemV1(
+            "exa.code.result.v1",
+            {
+                "text": normalized[:maximum_text],
+                "title": title,
+                "url": url,
+            },
+        ),
+        truncated,
+    )
+
+
 def _label_value(line: str, prefix: str, maximum: int) -> str:
     if not line.startswith(prefix):
         raise _BackendContractError("backend text invalid")
@@ -925,11 +1006,19 @@ def _failure(
     return ExecutionFailureV1(
         protocol_version=PROTOCOL_VERSION,
         source="exa",
-        operation="search.web",
+        operation=(
+            request.operation
+            if request.operation in {"search.web", "search.code"}
+            else "search.web"
+        ),
         backend_id=_BACKEND_ID,
-        backend_version=_BACKEND_VERSION,
+        backend_version=_backend_version(request.operation),
         error_code=error_code,
     )
+
+
+def _backend_version(operation: str) -> str:
+    return _CODE_BACKEND_VERSION if operation == "search.code" else _WEB_BACKEND_VERSION
 
 
 __all__ = ["execute_exa"]

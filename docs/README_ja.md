@@ -65,11 +65,11 @@ Update Agent Reach: https://raw.githubusercontent.com/Panniantong/agent-reach/ma
 | 🐦 **Twitter/X** | 閲覧・検索 | 設定不要 / Cookie | 単一ツイートはすぐに閲覧可能。Cookieで検索、タイムライン、投稿が解放（[twitter-cli](https://github.com/public-clis/twitter-cli)） |
 | 📕 **小紅書** | 閲覧・検索・コメント | OpenCLI / Cookie | OpenCLI はユーザー管理の既存 Chrome セッションだけを使用。MCP/旧ツールは Cookie-Editor を使用 |
 | 🎵 **抖音** | 動画解析・ウォーターマークなしダウンロード | mcporter | [douyin-mcp-server](https://github.com/yzfly/douyin-mcp-server)、ログイン不要 |
-| 💼 **LinkedIn** | Jina Reader（公開ページ） | プロフィール、企業、求人検索 | エージェントに「LinkedInの設定を手伝って」と伝えてください |
+| 💼 **LinkedIn** | 人材検索・求人検索 | ローカル MCP | 信頼済みの linkedin-scraper-mcp 4.14.0。Jina 検索フォールバックなし |
 | 💬 **WeChat記事** | 検索 + 閲覧 | 設定不要 | WeChat公式アカウント記事の検索+閲覧（完全Markdown）（[Exa](https://exa.ai) + [Camoufox](https://github.com/daijro/camoufox)（オプション）） |
 | 📰 **Weibo** | トレンド・検索・フィード・コメント | 設定不要 | ホット検索、コンテンツ/ユーザー/トピック検索、フィード、コメント（[mcp-server-weibo](https://github.com/Panniantong/mcp-server-weibo)） |
 | 💻 **V2EX** | 人気トピック・ノードトピック・トピック詳細+返信・ユーザープロフィール | 設定不要 | 公開JSON API、認証不要。技術コミュニティのコンテンツに最適 |
-| 📈 **雪球（Xueqiu）** | 株価・検索・人気投稿・人気銘柄 | 設定不要 | 公開APIで自動セッションCookie、ログイン不要 |
+| 📈 **雪球（Xueqiu）** | 株価・検索・人気投稿・人気銘柄 | ブラウザ Cookie | ログイン後の Cookie を明示的に設定 |
 | 🎙️ **小宇宙Podcast** | 文字起こし | 無料APIキー | Podcast音声 → Groq Whisper（無料）による完全テキスト文字起こし |
 | 🔍 **Web検索** | 検索 | 自動設定 | インストール時に自動設定、無料、APIキー不要（[Exa](https://exa.ai)、[mcporter](https://github.com/nicepkg/mcporter)経由） |
 | 📦 **GitHub** | 閲覧・検索 | 設定不要 | [gh CLI](https://cli.github.com) 搭載。公開リポジトリはすぐ使える。`gh auth login`でFork、Issue、PRが解放 |
@@ -195,12 +195,15 @@ Agent Reach はシンプルなことを1つだけ行います：**ツールの�
 
 ### ホスト統合向け構造化実行 API
 
-`agent_reach.execution.v1` は、既存の RSS、Bilibili、YouTube、V2EX、
-Exa の操作に、Reddit 7件、Facebook 4件、Instagram 4件を加えた合計29件の
-閉じた操作を提供します。追加された15件は `@jackwener/opencli@1.8.6-hermes.1` と
+`agent_reach.execution.v1` は、RSS 2件、Bilibili 4件、YouTube 3件、V2EX 4件、
+Exa 2件、Reddit 7件、Facebook 4件、Instagram 4件、Twitter 1件、小紅書 1件、
+LinkedIn 2件、雪球 1件の合計35件の閉じた操作を提供します。17件の OpenCLI
+ソーシャル操作は `@jackwener/opencli@1.8.6-hermes.1` と
 operator-attested `OpenCliSessionV1` に固定され、実行ごとに private HOME を
 使用しながら、信頼済み端末の既存 browser-session 設定だけを
-`OPENCLI_CONFIG_DIR` 経由で参照します。各操作は固定された backend contract
+`OPENCLI_CONFIG_DIR` 経由で参照します。LinkedIn はレビュー済みの loopback MCP
+サービス、雪球は信頼済みホストの1回限りの session、Exa Web と Code は別々の
+固定 MCP method を使用します。各操作は固定された backend contract
 と型付き host capability だけを受け取ります。
 コマンド、argv、endpoint、MCP method、proxy、Cookie、資格情報、browser、
 出力先、plugin、remote component、fallback は選択できません。認可、

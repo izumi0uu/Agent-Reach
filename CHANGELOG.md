@@ -17,6 +17,13 @@ All notable changes to this project will be documented in this file.
 - Added the complete read-only Reddit and Facebook catalog surfaces through
   the same fixed-command, typed-error runtime. No generic OpenCLI command or
   browser authority is exposed.
+- Expanded the closed registry from 29 to 35 operations with Twitter post
+  search, Xiaohongshu note search, LinkedIn people and job search, Xueqiu
+  stock search, and Exa Code search.
+- LinkedIn now uses the reviewed 4.14.0 loopback MCP service with
+  operation-specific read-tool allowlists; Jina Reader is not a search
+  fallback. Xueqiu receives only a one-attempt host capability, and Exa Code
+  uses its dedicated endpoint and `query + numResults` contract.
 
 ## [1.3.1] - 2026-03-27
 

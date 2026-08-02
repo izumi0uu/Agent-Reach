@@ -1,4 +1,4 @@
-"""Fork-owned Reddit, Facebook, and Instagram execution through OpenCLI."""
+"""Fork-owned social-platform execution through OpenCLI."""
 
 from __future__ import annotations
 
@@ -63,11 +63,13 @@ _OPENCLI_TARBALL_SHA256: Final = "dac98c69802621d55d8e3a5ae7032f47ab22b3785331a6
 _OPENCLI_TARBALL_SHA512: Final = (
     "kiYpXZ4jrwr6q6yVHCclL0wv3alO0JN1+GOjeY9S9q+73EKkZ3ZQE0nIiE7WoK5MC1ttK918PkOhYO3uKQPgyQ=="
 )
-_SOCIAL_SOURCES: Final = frozenset({"reddit", "facebook", "instagram"})
+_SOCIAL_SOURCES: Final = frozenset({"reddit", "facebook", "instagram", "twitter", "xiaohongshu"})
 _REDDIT_POST_ID: Final = re.compile(r"[a-z0-9]{1,32}")
 _SUBREDDIT: Final = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,20}")
 _USERNAME: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _COMMENT_LEVEL: Final = re.compile(r"L[0-9]+")
+_TWITTER_POST_ID: Final = re.compile(r"[1-9][0-9]{0,31}")
+_XIAOHONGSHU_NOTE_ID: Final = re.compile(r"[0-9a-f]{24}")
 _INTEGER_TEXT: Final = re.compile(r"(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)")
 _HUMAN_COUNT_TEXT: Final = re.compile(
     r"(?P<number>(?:[0-9]+(?:\.[0-9]+)?|[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?))"
@@ -214,6 +216,26 @@ _ROW_FIELDS: Final[Mapping[tuple[str, str], frozenset[str]]] = {
     ),
     ("instagram", "browse.explore"): frozenset(
         {"rank", "user", "caption", "likes", "comments", "type"}
+    ),
+    ("twitter", "search.posts"): frozenset(
+        {
+            "id",
+            "author",
+            "bio",
+            "text",
+            "created_at",
+            "likes",
+            "views",
+            "url",
+            "has_media",
+            "media_urls",
+            "media_posters",
+            "card",
+            "quoted_tweet",
+        }
+    ),
+    ("xiaohongshu", "search.notes"): frozenset(
+        {"rank", "title", "author", "likes", "published_at", "url", "author_url"}
     ),
 }
 
@@ -942,6 +964,16 @@ def _command_argv(request: ExecutionRequestV1, limit: int) -> tuple[str, ...]:
     key = (request.source, request.operation)
     if key == ("reddit", "search.posts"):
         return ("reddit", "search", cast(str, arguments["query"]), "--limit", str(limit))
+    if key == ("twitter", "search.posts"):
+        return ("twitter", "search", cast(str, arguments["query"]), "--limit", str(limit))
+    if key == ("xiaohongshu", "search.notes"):
+        return (
+            "xiaohongshu",
+            "search",
+            cast(str, arguments["query"]),
+            "--limit",
+            str(limit),
+        )
     if key == ("reddit", "read.post"):
         post_id = _contract_reddit_post_id_from_url(arguments["url"])
         if post_id is None:
@@ -1333,6 +1365,10 @@ def _project_rows(
         items = _project_instagram_profile(request, rows, maximum_text, state)
     elif key in {("instagram", "browse.user_posts"), ("instagram", "browse.explore")}:
         items = _project_instagram_posts(request, rows, maximum_text, state)
+    elif key == ("twitter", "search.posts"):
+        items = _project_twitter_posts(rows, maximum_text, state)
+    elif key == ("xiaohongshu", "search.notes"):
+        items = _project_xiaohongshu_notes(rows, maximum_text, state)
     else:
         raise _BackendContractError("backend result invalid")
     if len(items) > limit:
@@ -1685,6 +1721,161 @@ def _project_instagram_posts(
             )
         )
     return items
+
+
+def _project_twitter_posts(
+    rows: tuple[Mapping[str, object], ...],
+    maximum_text: int,
+    state: _ProjectionState,
+) -> list[ExecutionItemV1]:
+    items: list[ExecutionItemV1] = []
+    identities: set[str] = set()
+    for row in rows:
+        native_id = _required_text(row["id"], MAX_NATIVE_ID_CHARACTERS, state)
+        if _TWITTER_POST_ID.fullmatch(native_id) is None or native_id in identities:
+            raise _BackendContractError("twitter identity invalid")
+        identities.add(native_id)
+        if _twitter_post_id(row["url"]) != native_id:
+            raise _BackendContractError("twitter identity invalid")
+        _optional_text(row["bio"], maximum_text, state)
+        _validate_twitter_native_media(row)
+        has_media = row["has_media"]
+        if type(has_media) is not bool:
+            raise _BackendContractError("twitter media invalid")
+        items.append(
+            ExecutionItemV1(
+                "twitter.post.v1",
+                {
+                    "text": _optional_text(row["text"], maximum_text, state),
+                    "native_id": native_id,
+                    "url": f"https://x.com/i/status/{native_id}",
+                    "author": _optional_text(row["author"], MAX_AUTHOR_CHARACTERS, state),
+                    "published_at": _optional_text(
+                        row["created_at"], MAX_PUBLISHED_CHARACTERS, state
+                    ),
+                    "reaction_count": _optional_integer(row["likes"]),
+                    "view_count": _optional_integer(row["views"]),
+                    "has_media": 1 if has_media else 0,
+                },
+            )
+        )
+    return items
+
+
+def _project_xiaohongshu_notes(
+    rows: tuple[Mapping[str, object], ...],
+    maximum_text: int,
+    state: _ProjectionState,
+) -> list[ExecutionItemV1]:
+    items: list[ExecutionItemV1] = []
+    identities: set[str] = set()
+    for position, row in enumerate(rows, start=1):
+        _ordered_row_identifier(row["rank"], position)
+        native_id = _xiaohongshu_note_id(row["url"])
+        if native_id is None or native_id in identities:
+            raise _BackendContractError("xiaohongshu identity invalid")
+        identities.add(native_id)
+        _hosted_url(row["author_url"], "xiaohongshu.com")
+        title = _required_text(row["title"], MAX_TITLE_CHARACTERS, state)
+        items.append(
+            ExecutionItemV1(
+                "xiaohongshu.note.v1",
+                {
+                    "text": title[:maximum_text],
+                    "native_id": native_id,
+                    "title": title,
+                    "url": f"https://www.xiaohongshu.com/explore/{native_id}",
+                    "author": _optional_text(row["author"], MAX_AUTHOR_CHARACTERS, state),
+                    "published_at": _optional_text(
+                        row["published_at"], MAX_PUBLISHED_CHARACTERS, state
+                    ),
+                    "reaction_count": _human_count(row["likes"]),
+                },
+            )
+        )
+        if len(title) > maximum_text:
+            state.truncated = True
+    return items
+
+
+def _twitter_post_id(value: object) -> str | None:
+    if type(value) is not str or not _valid_public_result_url(value):
+        return None
+    parsed = urlsplit(value)
+    host = parsed.hostname
+    if (
+        host not in {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    parts = parsed.path.rstrip("/").split("/")
+    if len(parts) != 4 or parts[0] != "" or parts[2] != "status":
+        return None
+    post_id = parts[3]
+    return post_id if _TWITTER_POST_ID.fullmatch(post_id) is not None else None
+
+
+def _xiaohongshu_note_id(value: object) -> str | None:
+    if type(value) is not str or not _valid_public_result_url(value):
+        return None
+    parsed = urlsplit(value)
+    if parsed.hostname not in {"xiaohongshu.com", "www.xiaohongshu.com"}:
+        return None
+    parts = parsed.path.rstrip("/").split("/")
+    candidates = (
+        parts[2] if len(parts) == 3 and parts[1] == "explore" else None,
+        parts[3] if len(parts) == 4 and parts[1:3] == ["discovery", "item"] else None,
+    )
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if type(candidate) is str and _XIAOHONGSHU_NOTE_ID.fullmatch(candidate)
+        ),
+        None,
+    )
+
+
+def _validate_twitter_native_media(row: Mapping[str, object]) -> None:
+    for field in ("media_urls", "media_posters"):
+        value = row[field]
+        if not isinstance(value, list) or len(value) > 16:
+            raise _BackendContractError("twitter media invalid")
+        if any(type(item) is not str or not _valid_public_result_url(item) for item in value):
+            raise _BackendContractError("twitter media invalid")
+    for field in ("card", "quoted_tweet"):
+        if not _bounded_native_value(row[field], maximum_nodes=128):
+            raise _BackendContractError("twitter media invalid")
+
+
+def _bounded_native_value(value: object, *, maximum_nodes: int) -> bool:
+    pending = [value]
+    remaining = maximum_nodes
+    while pending:
+        current = pending.pop()
+        remaining -= 1
+        if remaining < 0:
+            return False
+        if current is None or type(current) in {bool, int}:
+            continue
+        if type(current) is str:
+            if len(current) > MAX_TEXT_CHARACTERS or _contains_invalid_scalar(current):
+                return False
+            continue
+        if isinstance(current, list):
+            if len(current) > 32:
+                return False
+            pending.extend(current)
+            continue
+        if isinstance(current, Mapping):
+            if len(current) > 32 or any(type(key) is not str for key in current):
+                return False
+            pending.extend(current.keys())
+            pending.extend(current.values())
+            continue
+        return False
+    return True
 
 
 def _required_url(value: object) -> str:

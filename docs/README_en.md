@@ -76,7 +76,7 @@ Update Agent Reach: https://raw.githubusercontent.com/Panniantong/agent-reach/ma
 | 📕 **XiaoHongShu** | Read · Search · Comments | OpenCLI / MCP | OpenCLI uses only an existing user-controlled Chrome session; MCP/legacy tools use a manual Cookie-Editor export |
 | 📘 **Facebook** | Search · Profiles · Feed · Groups list | OpenCLI | Desktop only: [OpenCLI](https://github.com/jackwener/opencli) reuses your logged-in Chrome session |
 | 📷 **Instagram** | User search · Profiles · Recent posts · Explore | OpenCLI | Desktop only: [OpenCLI](https://github.com/jackwener/opencli) reuses your logged-in Chrome session |
-| 💼 **LinkedIn** | Jina Reader (public pages) | Full profiles, companies, job search | Tell your Agent "help me set up LinkedIn" |
+| 💼 **LinkedIn** | People search · Job search | Local MCP | Trusted local linkedin-scraper-mcp 4.14.0; no Jina search fallback |
 | 💻 **V2EX** | Hot topics · Node topics · Topic detail + replies · User profile | Zero config | Public JSON API, no auth required. Great for tech community content |
 | 📈 **Xueqiu (雪球)** | Stock quotes · Search · Hot posts · Hot stocks | Browser cookie | Tell your Agent "help me set up Xueqiu" |
 | 🎙️ **Xiaoyuzhou Podcast** | Transcription | Free API key | Podcast audio → full text transcript via Groq Whisper (free) |
@@ -235,13 +235,16 @@ Every time you spin up a new Agent, you spend time finding tools, installing dep
 
 ### Structured execution API for host integrations
 
-`agent_reach.execution.v1` exposes twenty-nine closed operations: the existing
-RSS, Bilibili, YouTube, V2EX, and Exa operations plus seven Reddit,
-four Facebook, and four Instagram operations. The fifteen social operations
-accept only an operator-attested `OpenCliSessionV1`, pin
+`agent_reach.execution.v1` exposes thirty-five closed operations: two RSS,
+four Bilibili, three YouTube, four V2EX, two Exa, seven Reddit, four Facebook,
+four Instagram, one Twitter, one Xiaohongshu, two LinkedIn, and one Xueqiu
+operation. The seventeen OpenCLI social operations accept only an
+operator-attested `OpenCliSessionV1`, pin
 `@jackwener/opencli@1.8.6-hermes.1`, and run with a private per-attempt HOME while
 pointing `OPENCLI_CONFIG_DIR` at the trusted device's existing browser-session
-configuration. Each descriptor fixes its command and schema; callers cannot
+configuration. LinkedIn uses a reviewed loopback MCP service, Xueqiu accepts a
+one-attempt trusted-host session, and Exa Web and Code use distinct fixed MCP
+methods. Each descriptor fixes its command and schema; callers cannot
 select commands, argv, endpoints, MCP methods, proxies, Cookies, credentials,
 browsers/profiles, output paths, plugins, remote components, or fallbacks. This
 is not an OS sandbox: the embedding host still owns authorization, trusted
@@ -264,7 +267,7 @@ channels/
 ├── facebook.py     → OpenCLI (desktop browser session)
 ├── instagram.py    → OpenCLI (desktop browser session)
 ├── xiaohongshu.py  → OpenCLI ▸ xiaohongshu-mcp ▸ xhs-cli
-├── linkedin.py     → linkedin-mcp ▸ Jina Reader
+├── linkedin.py     → linkedin-mcp
 ├── rss.py          → feedparser
 ├── exa_search.py   → Exa via mcporter
 └── __init__.py     → Channel registry (for doctor checks)
@@ -287,7 +290,7 @@ Each channel file **actually probes** its candidate backends in order (not just 
 | GitHub | [gh CLI](https://cli.github.com) | — | Official tool, full API after auth |
 | Read RSS | [feedparser](https://github.com/kurtmckee/feedparser) | — | Python ecosystem standard |
 | XiaoHongShu | [OpenCLI](https://github.com/jackwener/opencli) (desktop) | [xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp) (server) ▸ xhs-cli | OpenCLI uses only an existing user-controlled session; other backends use a manual Cookie-Editor export |
-| LinkedIn | [linkedin-scraper-mcp](https://github.com/stickerdaniel/linkedin-mcp-server) | Jina Reader | MCP server, browser automation |
+| LinkedIn | [linkedin-scraper-mcp](https://github.com/stickerdaniel/linkedin-mcp-server) | — | Fixed local MCP service and browser automation; no Jina search fallback |
 | Xiaoyuzhou Podcast | `transcribe.sh` | — | `bash ~/.agent-reach/tools/xiaoyuzhou/transcribe.sh <URL>` |
 
 > 📌 These are the *current* choices, re-verified regularly on real machines. When a path dies we switch to the next — `agent-reach doctor` always tells you which one is active.

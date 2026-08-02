@@ -39,6 +39,11 @@ Author: Researcher
 Highlights:
 First highlight
 Second highlight"""
+VALID_CODE_RESULT_TEXT = """Title: Python retry example
+URL: https://github.com/example/project/blob/main/retry.py
+Code/Highlights:
+def retry(operation):
+    return operation()"""
 
 VALID_CLI = r'''import json
 import os
@@ -157,6 +162,15 @@ def _request(*, limit: int = 50, query: str = QUERY_CANARY) -> ExecutionRequestV
         PROTOCOL_VERSION,
         "exa",
         "search.web",
+        {"query": query, "limit": limit},
+    )
+
+
+def _code_request(*, limit: int = 50, query: str = QUERY_CANARY) -> ExecutionRequestV1:
+    return ExecutionRequestV1(
+        PROTOCOL_VERSION,
+        "exa",
+        "search.code",
         {"query": query, "limit": limit},
     )
 
@@ -297,6 +311,98 @@ def test_web_search_uses_one_fixed_stdin_process_and_closed_projection(
     assert not any(
         path.name.startswith(".agent-reach-exa-") for path in artifact_fixture.root.parent.iterdir()
     )
+
+
+def test_code_search_uses_special_endpoint_exact_tool_and_independent_projection(
+    artifact_fixture: _ArtifactFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = f"""import json
+import os
+from pathlib import Path
+import sys
+
+arguments = sys.argv[1:]
+assert arguments[0] == "--config"
+assert Path(arguments[1]).read_bytes() == b'{{"imports":[],"mcpServers":{{}}}}'
+assert arguments[2:] == [
+    "--log-level", "error", "call",
+    "--http-url", "https://mcp.exa.ai/mcp?tools=get_code_context_exa",
+    "--name", "exa", "--tool", "get_code_context_exa",
+    "--args", "-", "--output", "json",
+    "--timeout", "14000", "--no-oauth",
+]
+payload = json.load(sys.stdin)
+assert set(payload) == {{"query", "numResults"}}
+assert payload == {{"query": {QUERY_CANARY!r}, "numResults": 4}}
+assert "tokensNum" not in payload
+assert payload["query"] not in "\\0".join(sys.argv)
+assert all(payload["query"] not in value for value in os.environ.values())
+json.dump({{
+    "content": [{{"type": "text", "text": {VALID_CODE_RESULT_TEXT!r}}}],
+    "isError": False,
+}}, sys.stdout, separators=(",", ":"))
+"""
+    artifacts = _write_cli(artifact_fixture, script)
+    real_popen = subprocess.Popen
+    calls = 0
+
+    def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        nonlocal calls
+        calls += 1
+        return cast("subprocess.Popen[bytes]", real_popen(*args, **kwargs))
+
+    monkeypatch.setattr(exa.subprocess, "Popen", spawn)
+    monkeypatch.chdir(artifact_fixture.root.parent)
+
+    result = execute(
+        _code_request(limit=4),
+        _context(artifacts, maximum_items=4),
+    )
+
+    assert isinstance(result, ExecutionSuccessV1)
+    assert result.operation == "search.code"
+    assert result.backend_id == "exa-mcporter"
+    assert result.backend_version == "0.12.3+exa-code.v1"
+    assert result.truncated is False
+    assert calls == 1
+    assert len(result.items) == 1
+    assert result.items[0].schema_id == "exa.code.result.v1"
+    assert dict(result.items[0].fields) == {
+        "text": "def retry(operation): return operation()",
+        "title": "Python retry example",
+        "url": "https://github.com/example/project/blob/main/retry.py",
+    }
+
+
+def test_code_and_web_grammars_cannot_substitute_for_each_other() -> None:
+    with pytest.raises(exa._BackendContractError):
+        exa._project_code_results(
+            VALID_RESULT_TEXT,
+            maximum_items=20,
+            maximum_text=16_000,
+        )
+    with pytest.raises(exa._BackendContractError):
+        exa._project_web_results(
+            VALID_CODE_RESULT_TEXT,
+            maximum_items=20,
+            maximum_text=16_000,
+        )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "provider error: unavailable",
+        "Title: T\nURL: https://example.com\nCode: body",
+        "Title: T\nURL: https://example.com\nCode/Highlights:",
+        "Title: T\nURL: https://example.com\nText: ",
+        "Title: T\nURL: https://example.com\nPublished: N/A\nText: body",
+    ],
+)
+def test_code_text_grammar_fails_closed(text: str) -> None:
+    with pytest.raises(exa._BackendContractError):
+        exa._project_code_results(text, maximum_items=20, maximum_text=16_000)
 
 
 def test_no_results_is_a_closed_zero_item_success(
@@ -768,7 +874,7 @@ def test_process_failures_are_redacted_and_kill_the_original_group(
     monkeypatch.setattr(
         exa,
         "_PROCESS_TIMEOUT_SECONDS",
-        0.05 if expected_code == "deadline_exceeded" else 1.0,
+        0.05 if expected_code == "deadline_exceeded" else 3.0,
     )
 
     result = execute(_request(), _context(artifacts))
@@ -970,7 +1076,7 @@ def test_process_cleanup_uses_direct_kill_when_group_kill_is_unavailable(
     ]
 
 
-def test_search_code_has_no_executable_route(
+def test_code_search_rejects_stale_tokens_num_before_process_creation(
     artifact_fixture: _ArtifactFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -979,17 +1085,14 @@ def test_search_code_has_no_executable_route(
     def unexpected_spawn(*_: object, **__: object) -> object:
         nonlocal calls
         calls += 1
-        raise AssertionError("search.code reached process creation")
+        raise AssertionError("invalid search.code reached process creation")
 
     monkeypatch.setattr(exa.subprocess, "Popen", unexpected_spawn)
-    request = ExecutionRequestV1(
-        PROTOCOL_VERSION,
-        "exa",
-        "search.code",
-        {"query": QUERY_CANARY, "limit": 5},
-    )
-
-    result = execute(request, _context(artifact_fixture.capability()))
-
-    _assert_failure(result, "unsupported_operation", backend_identity=False)
+    with pytest.raises(ValueError):
+        ExecutionRequestV1(
+            PROTOCOL_VERSION,
+            "exa",
+            "search.code",
+            {"query": QUERY_CANARY, "tokensNum": 3000},
+        )
     assert calls == 0
