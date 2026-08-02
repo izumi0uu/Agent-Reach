@@ -17,11 +17,13 @@ import pytest
 from agent_reach.execution.v1 import (
     EXECUTION_ERROR_CODES,
     FETCHED_DOCUMENT_CAPABILITY,
+    LINKEDIN_MCP_CAPABILITY,
     MCPORTER_ARTIFACTS_CAPABILITY,
     NETWORK_ACCESS_CAPABILITY,
     OPENCLI_SESSION_CAPABILITY,
     PRIVATE_WORKSPACE_CAPABILITY,
     PROTOCOL_VERSION,
+    XUEQIU_SESSION_CAPABILITY,
     ExecutionContextV1,
     ExecutionFailureV1,
     ExecutionItemV1,
@@ -29,17 +31,26 @@ from agent_reach.execution.v1 import (
     ExecutionRequestV1,
     ExecutionSuccessV1,
     FetchedDocumentV1,
+    LinkedInMcpV1,
     McporterArtifactsV1,
     NetworkAccessV1,
     OpenCliSessionV1,
     PrivateWorkspaceV1,
+    XueqiuSessionV1,
     execute,
     list_capabilities,
 )
+from agent_reach.execution.v1.contracts import MAX_XUEQIU_SYMBOL_CHARACTERS
 
 FEED_URL = "https://example.com/feed.xml"
 ATOM = b"""<?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom"><title>Feed</title></feed>"""
+
+
+def test_sdist_excludes_worktree_git_pointer() -> None:
+    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+
+    assert '[tool.hatch.build.targets.sdist]\nexclude = ["/.git"]' in pyproject
 
 
 def _document() -> FetchedDocumentV1:
@@ -190,6 +201,67 @@ def _exa_item(*, url: str = "https://example.com/result") -> ExecutionItemV1:
     )
 
 
+def _exa_code_item() -> ExecutionItemV1:
+    return ExecutionItemV1(
+        "exa.code.result.v1",
+        {"text": "code", "title": "example", "url": "https://example.com/code"},
+    )
+
+
+def _twitter_item() -> ExecutionItemV1:
+    return ExecutionItemV1(
+        "twitter.post.v1",
+        {
+            "text": "post",
+            "native_id": "123",
+            "url": "https://x.com/i/status/123",
+            "author": "alice",
+            "published_at": None,
+            "reaction_count": 0,
+            "view_count": 0,
+            "has_media": 0,
+        },
+    )
+
+
+def _xiaohongshu_item() -> ExecutionItemV1:
+    return ExecutionItemV1(
+        "xiaohongshu.note.v1",
+        {
+            "text": "note",
+            "native_id": "0123456789abcdef01234567",
+            "title": "title",
+            "url": "https://www.xiaohongshu.com/explore/0123456789abcdef01234567",
+            "author": "alice",
+            "published_at": None,
+            "reaction_count": 0,
+        },
+    )
+
+
+def _linkedin_item(schema_id: str) -> ExecutionItemV1:
+    fields: dict[str, object] = {
+        "url": "https://www.linkedin.com/search/results/people/?keywords=engineer",
+        "sections": '{"search_results":"result"}',
+        "references": None,
+    }
+    if schema_id == "linkedin.jobs.search.document.v1":
+        fields["url"] = "https://www.linkedin.com/jobs/search/?keywords=engineer"
+        fields["job_ids"] = "[]"
+    return ExecutionItemV1(schema_id, fields)  # type: ignore[arg-type]
+
+
+def _xueqiu_item(
+    *,
+    symbol: str = "SH600519",
+    exchange: str = "SH",
+) -> ExecutionItemV1:
+    return ExecutionItemV1(
+        "xueqiu.stock.v1",
+        {"symbol": symbol, "name": "Kweichow Moutai", "exchange": exchange},
+    )
+
+
 def _mcporter_artifacts(root: Path) -> McporterArtifactsV1:
     return McporterArtifactsV1(
         node_executable=str(root / "node"),
@@ -210,6 +282,19 @@ def _opencli_session(root: Path) -> OpenCliSessionV1:
         opencli_cli=str(root / "opencli" / "dist" / "src" / "main.js"),
         opencli_tree_sha256="b" * 64,
         session_home=str(root / "session"),
+    )
+
+
+def _linkedin_service() -> LinkedInMcpV1:
+    return LinkedInMcpV1(
+        endpoint="http://127.0.0.1:8001/mcp",
+        alias_wheel_sha256="2173ead9777f6202fd581b4ec227d7a7212e9798f26f530b3174ff4683797558",
+        backend_wheel_sha256="62a889ac417e5e04d1635d5698df7178edc667a232dca42f417647e2ea25926d",
+        runtime_lock_sha256="9150a44d903ecfecdc48d115b87385bb78f3c69f4067951cf238e7fda6f09a17",
+        source_commit="7edbd32231afa6d40fabad207329591ad5a4feb0",
+        schema_sha256="2549d379d2306ba22c24f06015db67f448d109943fb96f2d656986d2d92f0699",
+        log_level="WARNING",
+        tool_timeout_seconds=12,
     )
 
 
@@ -391,8 +476,46 @@ def test_capability_discovery_is_static_closed_and_io_free(
                 ("instagram", "read.profile", "instagram.profile.v1"),
                 ("instagram", "browse.user_posts", "instagram.post.v1"),
                 ("instagram", "browse.explore", "instagram.post.v1"),
+                ("twitter", "search.posts", "twitter.post.v1"),
+                ("xiaohongshu", "search.notes", "xiaohongshu.note.v1"),
             )
         ],
+        (
+            "linkedin",
+            "search.people",
+            "linkedin.search.people.arguments.v1",
+            ("linkedin.people.search.document.v1",),
+            "linkedin-scraper-mcp",
+            "4.14.0",
+            (MCPORTER_ARTIFACTS_CAPABILITY, LINKEDIN_MCP_CAPABILITY),
+        ),
+        (
+            "linkedin",
+            "search.jobs",
+            "linkedin.search.jobs.arguments.v1",
+            ("linkedin.jobs.search.document.v1",),
+            "linkedin-scraper-mcp",
+            "4.14.0",
+            (MCPORTER_ARTIFACTS_CAPABILITY, LINKEDIN_MCP_CAPABILITY),
+        ),
+        (
+            "xueqiu",
+            "search.stocks",
+            "xueqiu.search.stocks.arguments.v1",
+            ("xueqiu.stock.v1",),
+            "xueqiu-api",
+            "1.5.0+search.v1",
+            (XUEQIU_SESSION_CAPABILITY,),
+        ),
+        (
+            "exa",
+            "search.code",
+            "exa.search.code.arguments.v1",
+            ("exa.code.result.v1",),
+            "exa-mcporter",
+            "0.12.3+exa-code.v1",
+            (NETWORK_ACCESS_CAPABILITY, MCPORTER_ARTIFACTS_CAPABILITY),
+        ),
     ]
     assert all(item.protocol_version == PROTOCOL_VERSION for item in capabilities)
     assert [item.maximum_items for item in capabilities] == [
@@ -425,6 +548,12 @@ def test_capability_discovery_is_static_closed_and_io_free(
         1,
         50,
         50,
+        50,
+        50,
+        1,
+        1,
+        50,
+        20,
     ]
     assert all(item.maximum_document_bytes == 1_048_576 for item in capabilities)
     assert all(item.maximum_metadata_bytes == 16_384 for item in capabilities)
@@ -433,8 +562,9 @@ def test_capability_discovery_is_static_closed_and_io_free(
         1_048_576,
         *([524_288] * 7),
         *([1_048_576] * 4),
+        *([524_288] * 20),
+        1_048_576,
         524_288,
-        *([524_288] * 15),
     ]
     assert all(item.maximum_content_type_characters == 512 for item in capabilities)
     assert all(item.maximum_content_location_characters == 8_192 for item in capabilities)
@@ -447,7 +577,7 @@ def test_capability_discovery_is_static_closed_and_io_free(
         2_048,
         *([1_024] * 7),
         *([2_048] * 5),
-        *([2_048] * 15),
+        *([2_048] * 21),
     ]
     assert all(item.maximum_published_characters == 512 for item in capabilities)
     with pytest.raises(FrozenInstanceError):
@@ -464,7 +594,7 @@ def denied_home(cls):
     raise AssertionError('ambient home access')
 pathlib.Path.home = classmethod(denied_home)
 from agent_reach.execution.v1 import list_capabilities
-assert len(list_capabilities()) == 29
+assert len(list_capabilities()) == 35
 assert 'feedparser' not in sys.modules
 assert not any(name == 'bili_cli' or name.startswith('bili_cli.') for name in sys.modules)
 assert not any(name == 'yt_dlp' or name.startswith('yt_dlp.') for name in sys.modules)
@@ -477,6 +607,8 @@ assert 'agent_reach.execution.v1.v2ex' not in sys.modules
 assert 'agent_reach.execution.v1._v2ex_transport' not in sys.modules
 assert 'agent_reach.execution.v1.exa' not in sys.modules
 assert 'agent_reach.execution.v1.opencli_social' not in sys.modules
+assert 'agent_reach.execution.v1.linkedin' not in sys.modules
+assert 'agent_reach.execution.v1.xueqiu' not in sys.modules
 assert 'httpcore' not in sys.modules
 assert 'agent_reach.config' not in sys.modules
 """
@@ -958,6 +1090,101 @@ def test_exa_result_schema_rejects_unsafe_urls(url: str) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("symbol", "exchange"),
+    [
+        ("SH600519", "SH"),
+        ("SH600519", "SHA"),
+        ("SHA:600519", "SHA"),
+        ("SZA:300750", "SZA"),
+        ("BJA:430047", "BJA"),
+        ("US:" + "A" * (MAX_XUEQIU_SYMBOL_CHARACTERS - 3), "US"),
+    ],
+)
+def test_xueqiu_result_contract_accepts_runtime_symbol_grammar(
+    symbol: str,
+    exchange: str,
+) -> None:
+    result = ExecutionSuccessV1(
+        PROTOCOL_VERSION,
+        "xueqiu",
+        "search.stocks",
+        "xueqiu-api",
+        "1.5.0+search.v1",
+        (_xueqiu_item(symbol=symbol, exchange=exchange),),
+    )
+
+    assert result.items[0].fields["symbol"] == symbol
+
+
+@pytest.mark.parametrize(
+    ("symbol", "exchange"),
+    [
+        ("SH60051", "SH"),
+        ("SH600519", "SZ"),
+        ("SHA600519", "SHA"),
+        ("SHA:", "SHA"),
+        ("SHA:600519", "SH"),
+        ("sha:600519", "SHA"),
+        ("US:" + "A" * (MAX_XUEQIU_SYMBOL_CHARACTERS - 2), "US"),
+    ],
+)
+def test_xueqiu_result_contract_rejects_runtime_invalid_symbol_grammar(
+    symbol: str,
+    exchange: str,
+) -> None:
+    with pytest.raises(ValueError):
+        ExecutionSuccessV1(
+            PROTOCOL_VERSION,
+            "xueqiu",
+            "search.stocks",
+            "xueqiu-api",
+            "1.5.0+search.v1",
+            (_xueqiu_item(symbol=symbol, exchange=exchange),),
+        )
+
+
+@pytest.mark.parametrize(
+    ("source", "operation", "backend_id", "backend_version", "substituted_item"),
+    [
+        ("twitter", "search.posts", "opencli", "1.8.6-hermes.1", _xiaohongshu_item()),
+        ("xiaohongshu", "search.notes", "opencli", "1.8.6-hermes.1", _twitter_item()),
+        (
+            "linkedin",
+            "search.people",
+            "linkedin-scraper-mcp",
+            "4.14.0",
+            _linkedin_item("linkedin.jobs.search.document.v1"),
+        ),
+        (
+            "linkedin",
+            "search.jobs",
+            "linkedin-scraper-mcp",
+            "4.14.0",
+            _linkedin_item("linkedin.people.search.document.v1"),
+        ),
+        ("xueqiu", "search.stocks", "xueqiu-api", "1.5.0+search.v1", _exa_code_item()),
+        ("exa", "search.code", "exa-mcporter", "0.12.3+exa-code.v1", _exa_item()),
+    ],
+)
+def test_new_operation_success_contracts_reject_cross_operation_result_substitution(
+    source: str,
+    operation: str,
+    backend_id: str,
+    backend_version: str,
+    substituted_item: ExecutionItemV1,
+) -> None:
+    with pytest.raises(ValueError):
+        ExecutionSuccessV1(
+            PROTOCOL_VERSION,
+            source,
+            operation,
+            backend_id,
+            backend_version,
+            (substituted_item,),
+        )
+
+
 def test_error_taxonomy_is_expanded_but_remains_closed_with_exact_provenance() -> None:
     assert EXECUTION_ERROR_CODES == frozenset(
         {
@@ -1299,6 +1526,81 @@ def test_fetched_document_rejects_unsafe_metadata(
             ),
             "invalid_request",
         ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "twitter",
+                "search.posts",
+                {"query": "query", "limit": 1, "command": "send"},
+            ),
+            ExecutionContextV1((_opencli_session(Path("/opt/opencli")),)),
+            "invalid_request",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "xiaohongshu",
+                "search.notes",
+                {"query": "query", "limit": 1},
+            ),
+            ExecutionContextV1((NetworkAccessV1(),)),
+            "invalid_request",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "linkedin",
+                "search.people",
+                {"query": "query", "limit": 1},
+            ),
+            ExecutionContextV1(
+                (
+                    _linkedin_service(),
+                    _mcporter_artifacts(Path("/opt/agent-reach")),
+                )
+            ),
+            "invalid_request",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "linkedin",
+                "search.jobs",
+                {"query": "query", "limit": 1, "method": "send_message"},
+            ),
+            ExecutionContextV1(
+                (
+                    _mcporter_artifacts(Path("/opt/agent-reach")),
+                    _linkedin_service(),
+                )
+            ),
+            "invalid_request",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "xueqiu",
+                "search.stocks",
+                {"query": "query", "limit": 0},
+            ),
+            ExecutionContextV1((XueqiuSessionV1(bytearray(b"xq_a_token=secret")),)),
+            "invalid_request",
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "exa",
+                "search.code",
+                {"query": "query", "limit": 1},
+            ),
+            ExecutionContextV1(
+                (
+                    _mcporter_artifacts(Path("/opt/agent-reach")),
+                    NetworkAccessV1(),
+                )
+            ),
+            "invalid_request",
+        ),
     ],
 )
 def test_dispatch_rejects_unknown_authority_before_backend_import(
@@ -1316,7 +1618,16 @@ def test_dispatch_rejects_unknown_authority_before_backend_import(
         fromlist: tuple[str, ...] = (),
         level: int = 0,
     ) -> object:
-        if level == 1 and name in {"bilibili", "exa", "rss", "v2ex", "youtube"}:
+        if level == 1 and name in {
+            "bilibili",
+            "exa",
+            "linkedin",
+            "opencli_social",
+            "rss",
+            "v2ex",
+            "xueqiu",
+            "youtube",
+        }:
             raise AssertionError(f"rejected request imported {name}")
         return original_import(name, globals_, locals_, fromlist, level)
 
@@ -1377,6 +1688,66 @@ def test_host_cancellation_propagates_without_backend_execution() -> None:
                 {"query": "query", "limit": 1},
             ),
             (NetworkAccessV1(), _mcporter_artifacts(Path("/opt/agent-reach"))),
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "twitter",
+                "search.posts",
+                {"query": "query", "limit": 1},
+            ),
+            (_opencli_session(Path("/opt/opencli-twitter")),),
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "xiaohongshu",
+                "search.notes",
+                {"query": "query", "limit": 1},
+            ),
+            (_opencli_session(Path("/opt/opencli-xiaohongshu")),),
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "linkedin",
+                "search.people",
+                {"query": "query", "limit": 1},
+            ),
+            (
+                _mcporter_artifacts(Path("/opt/linkedin-people")),
+                _linkedin_service(),
+            ),
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "linkedin",
+                "search.jobs",
+                {"query": "query", "limit": 1},
+            ),
+            (
+                _mcporter_artifacts(Path("/opt/linkedin-jobs")),
+                _linkedin_service(),
+            ),
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "xueqiu",
+                "search.stocks",
+                {"query": "query", "limit": 1},
+            ),
+            (XueqiuSessionV1(bytearray(b"xq_a_token=secret")),),
+        ),
+        (
+            ExecutionRequestV1(
+                PROTOCOL_VERSION,
+                "exa",
+                "search.code",
+                {"query": "query", "limit": 1},
+            ),
+            (NetworkAccessV1(), _mcporter_artifacts(Path("/opt/exa-code"))),
         ),
     )
     for request, host_capabilities in cases:

@@ -85,9 +85,9 @@ AI Agent 已经能帮你写代码、改文档、管项目——但你让它去�
 | 📘 **Facebook** | — | 搜索、主页、Feed、群组列表 | 桌面装 OpenCLI（复用 Chrome 登录态） |
 | 📷 **Instagram** | — | 用户搜索、Profile、用户最近帖子、Explore | 桌面装 OpenCLI（复用 Chrome 登录态） |
 | 📕 **小红书** | — | 搜索、阅读、评论 | OpenCLI 只用用户已有 Chrome 会话；MCP/存量工具用 Cookie-Editor |
-| 💼 **LinkedIn** | Jina Reader 读公开页面 | Profile 详情、公司页面、职位搜索 | 告诉 Agent「帮我配 LinkedIn」 |
+| 💼 **LinkedIn** | — | 人才搜索、职位搜索 | 配置受信任本机的 linkedin-scraper-mcp 4.14.0 |
 | 💻 **V2EX** | 热门帖子、节点帖子、帖子详情+回复、用户信息 | — | 无需配置 |
-| 📈 **雪球** | 股票行情、搜索股票、热门帖子、热门股票排行 | — | 告诉 Agent「帮我配雪球」 |
+| 📈 **雪球** | — | 股票行情、搜索股票、热门帖子、热门股票排行 | 登录后显式配置浏览器 Cookie |
 | 🎙️ **小宇宙播客** | — | 播客音频转文字（Whisper 转录，免费 Key） | 告诉 Agent「帮我配小宇宙播客」 |
 
 > **不知道怎么配？不用查文档。** 直接告诉 Agent「帮我配 XXX」，它知道需要什么、会一步一步引导你。
@@ -179,13 +179,15 @@ AI Agent 已经能帮你写代码、改文档、管项目——但你让它去�
 ### 结构化执行 API（维护者集成）
 
 `agent_reach.execution.v1` 提供一个附加的、封闭的 Python 执行合同，供需要
-自行负责授权、网络/进程隔离和审计的宿主集成。当前 registry 共 29 项闭合
-操作：RSS 2 项、Bilibili 4 项、YouTube 3 项、V2EX 4 项、Exa Web 1 项，
-以及 Reddit 7 项、Facebook 4 项和 Instagram 4 项。后三个平台固定使用
-`@jackwener/opencli@1.8.6-hermes.1`，覆盖搜索、帖子/主页读取和对应的浏览操作；
-每项 operation 都有独立 descriptor，不开放通用 OpenCLI 命令入口。
+自行负责授权、网络/进程隔离和审计的宿主集成。当前 registry 共 35 项闭合
+操作：RSS 2 项、Bilibili 4 项、YouTube 3 项、V2EX 4 项、Exa 2 项，
+Reddit 7 项、Facebook 4 项、Instagram 4 项、Twitter 1 项、小红书 1 项，
+以及 LinkedIn 2 项和雪球 1 项。17 项社交操作固定使用
+`@jackwener/opencli@1.8.6-hermes.1`；LinkedIn 固定使用经过审查的本机 MCP
+服务，雪球只接受可信宿主提供的单次会话，Exa Web 与 Exa Code 使用各自固定
+的 MCP 方法。每项 operation 都有独立 descriptor，不开放通用命令或 MCP 入口。
 
-这 15 项社交操作只接受宿主构造的 `OpenCliSessionV1`：绝对 Node/OpenCLI
+这 17 项社交操作只接受宿主构造的 `OpenCliSessionV1`：绝对 Node/OpenCLI
 路径、Node SHA-256、包含生产依赖的完整 OpenCLI 安装前缀 tree SHA-256，以及
 可信设备上的既有会话目录。runtime 每次执行都会把 Node、完整安装闭包和固定
 lifecycle guard 复制到私有临时目录，复验副本 identity 和 package manifest，
@@ -217,7 +219,7 @@ channels/
 ├── facebook.py     → OpenCLI（桌面浏览器登录态）
 ├── instagram.py    → OpenCLI（桌面浏览器登录态）
 ├── xiaohongshu.py  → OpenCLI ▸ xiaohongshu-mcp ▸ xhs-cli
-├── linkedin.py     → linkedin-mcp ▸ Jina Reader
+├── linkedin.py     → linkedin-mcp
 ├── rss.py          → feedparser
 ├── exa_search.py   → Exa via mcporter
 └── __init__.py     → 渠道注册（doctor 检测用）
@@ -240,7 +242,7 @@ channels/
 | GitHub | [gh CLI](https://cli.github.com) | — | 官方工具，认证后完整 API 能力 |
 | 读 RSS | [feedparser](https://github.com/kurtmckee/feedparser) | — | Python 生态标准选择 |
 | 小红书 | [OpenCLI](https://github.com/jackwener/opencli)（桌面） | [xiaohongshu-mcp](https://github.com/xpzouying/xiaohongshu-mcp)（服务器）▸ xhs-cli | OpenCLI 只用用户已有会话；其余后端用 Cookie-Editor 手工导出 |
-| LinkedIn | [linkedin-scraper-mcp](https://github.com/stickerdaniel/linkedin-mcp-server) | Jina Reader | MCP 服务，浏览器自动化 |
+| LinkedIn | [linkedin-scraper-mcp](https://github.com/stickerdaniel/linkedin-mcp-server) | — | 固定本机 MCP 服务，浏览器自动化；没有 Jina 搜索 fallback |
 
 > 📌 这些都是「当前选型」，基于真机实测定期复核。某条路失效了我们换下一条——`agent-reach doctor` 永远告诉你现在走的是哪条。
 

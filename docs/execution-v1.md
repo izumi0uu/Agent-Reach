@@ -13,10 +13,12 @@ from agent_reach.execution.v1 import (
     ExecutionContextV1,
     ExecutionRequestV1,
     FetchedDocumentV1,
+    LinkedInMcpV1,
     McporterArtifactsV1,
     NetworkAccessV1,
     OpenCliSessionV1,
     PrivateWorkspaceV1,
+    XueqiuSessionV1,
     execute,
     list_capabilities,
 )
@@ -76,7 +78,7 @@ reddit_result = execute(
 )
 ```
 
-The v1 registry contains twenty-nine operations:
+The v1 registry contains thirty-five operations:
 
 - `rss:read.feed` and `rss:browse.entries`
 - `bilibili:search.videos`, `bilibili:read.video`, `bilibili:browse.hot`, and
@@ -93,13 +95,17 @@ The v1 registry contains twenty-nine operations:
   `facebook:browse.groups`
 - `instagram:search.users`, `instagram:read.profile`,
   `instagram:browse.user_posts`, and `instagram:browse.explore`
+- `twitter:search.posts` and `xiaohongshu:search.notes`
+- `linkedin:search.people` and `linkedin:search.jobs`
+- `xueqiu:search.stocks`
+- `exa:search.code`
 
 Requests have closed operation-specific arguments. They cannot choose a
 backend, command, executable, argv, transport, endpoint, MCP method,
 credential, browser profile, Cookie, output path, plugin, remote component, or
-fallback. In particular, Exa code search is not registered because the
-documented `tokensNum` contract does not match the live deprecated method's
-`numResults` schema.
+fallback. Exa Web and Code are distinct registered operations: Code uses the
+reviewed `get_code_context_exa` method with `query` and `numResults`; the stale
+`tokensNum` field is not accepted.
 
 The host must fetch and validate the document before execution. RSS receives
 one non-empty `FetchedDocumentV1` of at most 1 MiB. Its public HTTP(S)
@@ -157,23 +163,101 @@ canonical URLs are rebuilt from those identities. Once `read.topic` has a
 valid topic, a reply failure returns only that topic with a closed partial error
 instead of retrying or exposing raw provider data.
 
-Exa Web search requires `NetworkAccessV1` plus one
+Exa Web and Code search require `NetworkAccessV1` plus one
 `McporterArtifactsV1`. The artifact capability contains only operator-attested
 absolute Node, mcporter, and sterile-config paths and their reviewed digests;
 it contains no query, credential, endpoint, method, argv, or generic process
 authority. The runtime revalidates the complete artifact closure immediately
-before invoking one fixed mcporter command for `web_search_exa` at
-`https://mcp.exa.ai/mcp`. The query is sent only as bounded canonical JSON on
-stdin. The child receives a sterile environment, bounded concurrent pipes,
-and process-group kill-and-reap cleanup. Exa receives the query and may retain
-it; hosts must not describe this route as provider-private or no-query-log.
+before selecting one of these two operation-owned calls:
+
+| Operation | Fixed endpoint | Fixed tool | Stdin arguments |
+| --- | --- | --- | --- |
+| `exa:search.web` | `https://mcp.exa.ai/mcp` | `web_search_exa` | `{"query": QUERY, "numResults": N}` |
+| `exa:search.code` | `https://mcp.exa.ai/mcp?tools=get_code_context_exa` | `get_code_context_exa` | `{"query": QUERY, "numResults": N}` |
+
+`N` is the minimum of the requested limit, the context item limit, and the
+provider maximum of 20. `tokensNum` is not part of either closed argument
+schema. Code results use their own `Title`, `URL`, and `Code/Highlights` or
+`Text` grammar and return `exa.code.result.v1`; Web output cannot satisfy that
+grammar or substitute for Code. Both queries are sent only as bounded
+canonical JSON on stdin. The child receives a sterile environment, bounded
+concurrent pipes, and process-group kill-and-reap cleanup. Exa receives the
+query and may retain it; hosts must not describe either route as
+provider-private or no-query-log.
+
+### LinkedIn search execution
+
+The two LinkedIn operations require `McporterArtifactsV1` followed by one
+`LinkedInMcpV1`. The service attestation closes the backend to
+`linkedin-scraper-mcp==4.14.0` and its actual executable distribution
+`mcp-server-linkedin==4.14.0`, reviewed source commit
+`7edbd32231afa6d40fabad207329591ad5a4feb0`, schema SHA-256
+`2549d379d2306ba22c24f06015db67f448d109943fb96f2d656986d2d92f0699`,
+and loopback endpoint `http://127.0.0.1:8001/mcp`. The compatibility-wheel,
+code-wheel, and runtime-lock SHA-256 values are respectively:
+
+```text
+2173ead9777f6202fd581b4ec227d7a7212e9798f26f530b3174ff4683797558
+62a889ac417e5e04d1635d5698df7178edc667a232dca42f417647e2ea25926d
+9150a44d903ecfecdc48d115b87385bb78f3c69f4067951cf238e7fda6f09a17
+```
+
+Operator activation must configure the service tool timeout to exactly 12
+seconds and its log threshold to `WARNING`, `ERROR`, or `CRITICAL`; upstream
+`INFO` records search terms. Mcporter itself is invoked with a fixed 14-second
+outer timeout and log level `error`. The service may expose other tools, but
+the runtime validates one of two exact, operation-specific mcporter config
+files before each call:
+
+```json
+{"imports":[],"mcpServers":{"linkedin":{"allowedTools":["search_people"],"baseUrl":"http://127.0.0.1:8001/mcp"}}}
+```
+
+```json
+{"imports":[],"mcpServers":{"linkedin":{"allowedTools":["search_jobs"],"baseUrl":"http://127.0.0.1:8001/mcp"}}}
+```
+
+Their SHA-256 values are
+`bde84482cda676b21d6a2c10ceef2ad8ea76106a35b73fbf05dbd79c168a70a5`
+for people and
+`917b75d814de1e44021c21966b1887aca5dc7281069a67ef60b26b700be1a36b`
+for jobs. Imports are empty and each allowlist contains exactly the selected
+read tool. The call uses the configured `linkedin` server; callers cannot
+replace it with an ad hoc endpoint, method, or MCP definition.
+
+People receives only `{"keywords": QUERY}`. Jobs receives only
+`{"keywords": QUERY, "max_pages": 1}`. The public `limit` is never passed to
+the backend; it only bounds returned references and job IDs. Each success is
+one validated native search document containing a canonical search URL,
+canonical JSON sections, optional reviewed references, and, for jobs, ordered
+numeric job IDs. The local service retains browser and login state. Jina
+Reader, generic MCP configuration, and the service's write tools are not
+fallbacks.
+
+### Xueqiu stock search execution
+
+`xueqiu:search.stocks` requires exactly one `XueqiuSessionV1`. A trusted host
+creates it from a mutable Cookie-header byte array only after authorization;
+construction clears the caller's input copy, and execution clears the
+capability on every terminal path. The capability is request-local and must
+not cross an untrusted host boundary or appear in logs, receipts, audit, or a
+public result.
+
+The runtime owns the fixed `https://xueqiu.com/stock/search.json` operation,
+maps the public query to `code` and the bounded limit to `size`, resolves only
+globally routable addresses, pins the selected address while retaining the
+original TLS hostname, and rejects redirects and response-shape drift. It does
+not read Agent-Reach config, browser cookies, a global cookie jar, proxy
+settings, or a homepage fallback. Results are ordered, unique, identity-
+correlated `xueqiu.stock.v1` items containing only symbol, name, and exchange.
 
 ### OpenCLI social execution
 
-The fifteen Reddit, Facebook, and Instagram operations require exactly one
-`OpenCliSessionV1` and use only `@jackwener/opencli@1.8.6-hermes.1`. The descriptor,
-not the request or host, selects the command. Every command also appends the
-fixed `--format yaml` output selector:
+The seventeen Reddit, Facebook, Instagram, Twitter, and Xiaohongshu operations
+require exactly one `OpenCliSessionV1` and use only
+`@jackwener/opencli@1.8.6-hermes.1`. The descriptor, not the request or host,
+selects the command. Every command also appends the fixed `--format yaml`
+output selector:
 
 | Operation | Fixed OpenCLI arguments before `--format yaml` |
 | --- | --- |
@@ -192,6 +276,8 @@ fixed `--format yaml` output selector:
 | `instagram:read.profile` | `instagram profile USERNAME` |
 | `instagram:browse.user_posts` | `instagram user USERNAME --limit N` |
 | `instagram:browse.explore` | `instagram explore --limit N` |
+| `twitter:search.posts` | `twitter search QUERY --limit N` |
+| `xiaohongshu:search.notes` | `xiaohongshu search QUERY --limit N` |
 
 `OpenCliSessionV1` is an immutable host authority, not request data. It binds
 an absolute Node executable and SHA-256, an absolute dedicated npm install
@@ -271,11 +357,12 @@ to the host instead of being converted into a backend result.
 
 `list_capabilities()` is static. It does not import `feedparser`, `bili_cli`,
 `yt_dlp`, `yt_dlp_ejs`, `deno`, `httpcore`, or an MCP client; inspect
-configuration or artifacts; load the OpenCLI social runtime; read credentials;
-access the network or filesystem; or start a process. Hosts should validate
-the exact protocol, descriptors, schemas, limits, backend identity, dependency
-commit, and installed backend version before enabling an operation. A newly
-published capability is not authority for a host to enable it automatically.
+configuration, artifacts, or session capabilities; load the Exa, LinkedIn,
+Xueqiu, or OpenCLI social runtime; resolve DNS or secrets; access the network
+or filesystem; or start a process. Hosts should validate the exact protocol,
+descriptors, schemas, limits, backend identity, dependency commit, and
+installed backend version before enabling an operation. A newly published
+capability is not authority for a host to enable it automatically.
 
 ## Fork update discipline
 

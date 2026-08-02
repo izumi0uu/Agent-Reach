@@ -8,7 +8,8 @@ Exa AI 搜索引擎。
 
 ```bash
 mcporter call 'exa.web_search_exa(query: "query", numResults: 5)'
-mcporter call 'exa.get_code_context_exa(query: "code question", tokensNum: 3000)'
+mcporter --http-url 'https://mcp.exa.ai/mcp?tools=get_code_context_exa' \
+  call 'exa.get_code_context_exa(query: "code question", numResults: 5)'
 ```
 
 ### 使用场景
@@ -16,7 +17,10 @@ mcporter call 'exa.get_code_context_exa(query: "code question", tokensNum: 3000)
 | 场景 | 参数 |
 |-----|------|
 | 网页搜索 | `web_search_exa(query: "...", numResults: 5)` |
-| 代码搜索 | `get_code_context_exa(query: "...", tokensNum: 3000)` |
+| 代码搜索 | 特殊 Exa MCP endpoint 的 `get_code_context_exa(query: "...", numResults: 5)` |
+
+代码搜索只接受 `query` 和可选的 `numResults`。旧示例中的 `tokensNum` 不属于当前
+接口，不能用它替代 `numResults`；代码搜索也不能退化成 `web_search_exa`。
 
 ### 特点
 

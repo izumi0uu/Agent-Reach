@@ -65,7 +65,7 @@ Update Agent Reach: https://raw.githubusercontent.com/Panniantong/agent-reach/ma
 | 🐦 **Twitter/X** | 읽기 · 검색 | Cookie | Cookie로 검색, 타임라인, 트윗 읽기, 아티클 읽기 가능 ([twitter-cli](https://github.com/public-clis/twitter-cli)) |
 | 📕 **XiaoHongShu** | 읽기 · 검색 · 댓글 | OpenCLI / Cookie | OpenCLI는 사용자가 관리하는 기존 Chrome 세션만 사용하며, MCP/기존 도구는 Cookie-Editor 사용 |
 | 🎵 **Douyin** | 비디오 파싱 · 워터마크 없는 다운로드 | mcporter | [douyin-mcp-server](https://github.com/yzfly/douyin-mcp-server) 통해, 로그인 불필요 |
-| 💼 **LinkedIn** | Jina Reader (공개 페이지) | Cookie | 전체 프로필, 회사, 채용 공고 검색 가능. 에이전트에 "LinkedIn 설정 도와줘"라고 말하세요 |
+| 💼 **LinkedIn** | 인재 검색 · 채용 검색 | 로컬 MCP | 신뢰할 수 있는 linkedin-scraper-mcp 4.14.0 사용. Jina 검색 fallback 없음 |
 | 💬 **WeChat Articles** | 검색 + 읽기 | 없음 | Exa를 통한 WeChat 공식 계정 게시글 검색 + 읽기 (설정 없음) + 선택적 [Camoufox](https://github.com/daijro/camoufox) |
 | 📰 **Weibo** | 인기 · 검색 · 피드 · 댓글 | 없음 | 핫 검색, 콘텐츠/사용자/주제 검색, 피드, 댓글 ([mcp-server-weibo](https://github.com/Panniantong/mcp-server-weibo)) |
 | 💻 **V2EX** | 인기 주제 · 노드 주제 · 주제 상세 + 답글 · 사용자 프로필 | 없음 | 공개 JSON API, 인증 없음. 기술 커뮤니티 콘텐츠에 적합 |
@@ -195,12 +195,15 @@ Agent Reach는 한 가지 간단한 작업을 수행합니다: **도구 선택 �
 
 ### 호스트 통합용 구조화 실행 API
 
-`agent_reach.execution.v1`은 기존 RSS, Bilibili, YouTube, V2EX, Exa 작업에
-Reddit 7개, Facebook 4개, Instagram 4개를 추가하여 총 29개의 폐쇄형
-작업을 제공합니다. 새 소셜 작업 15개는 `@jackwener/opencli@1.8.6-hermes.1`과
+`agent_reach.execution.v1`은 RSS 2개, Bilibili 4개, YouTube 3개, V2EX 4개,
+Exa 2개, Reddit 7개, Facebook 4개, Instagram 4개, Twitter 1개,
+Xiaohongshu 1개, LinkedIn 2개, Xueqiu 1개로 총 35개의 폐쇄형 작업을
+제공합니다. 17개의 OpenCLI 소셜 작업은 `@jackwener/opencli@1.8.6-hermes.1`과
 operator-attested `OpenCliSessionV1`으로 고정되며, 실행마다 private HOME을
 사용하고 `OPENCLI_CONFIG_DIR`을 통해 신뢰할 수 있는 장치의 기존 browser-session
-설정만 참조합니다. 각 작업은 고정된 backend contract와 형식화된 host
+설정만 참조합니다. LinkedIn은 검토된 loopback MCP 서비스, Xueqiu는 신뢰할 수
+있는 호스트의 일회성 session, Exa Web과 Code는 서로 다른 고정 MCP method를
+사용합니다. 각 작업은 고정된 backend contract와 형식화된 host
 capability만 받습니다. 명령, argv,
 endpoint, MCP method, proxy, Cookie, 자격 증명, browser, 출력 경로, plugin,
 remote component 또는 fallback을 선택할 수 없습니다. 권한 부여, 비공개

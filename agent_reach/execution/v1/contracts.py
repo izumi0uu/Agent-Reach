@@ -12,7 +12,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, cast
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, quote_plus, urlsplit
 
 PROTOCOL_VERSION: Final = "v1"
 FETCHED_DOCUMENT_CAPABILITY: Final = "fetched_document.v1"
@@ -20,6 +20,8 @@ NETWORK_ACCESS_CAPABILITY: Final = "network_access.v1"
 PRIVATE_WORKSPACE_CAPABILITY: Final = "private_workspace.v1"
 MCPORTER_ARTIFACTS_CAPABILITY: Final = "mcporter_artifacts.v1"
 OPENCLI_SESSION_CAPABILITY: Final = "opencli_session.v1"
+LINKEDIN_MCP_CAPABILITY: Final = "linkedin_mcp.v1"
+XUEQIU_SESSION_CAPABILITY: Final = "xueqiu_session.v1"
 
 MAX_DOCUMENT_BYTES: Final = 1_048_576
 MAX_METADATA_BYTES: Final = 16_384
@@ -31,6 +33,7 @@ MAX_TEXT_CHARACTERS: Final = 16_000
 MAX_TITLE_CHARACTERS: Final = 4_096
 MAX_URL_CHARACTERS: Final = 8_192
 MAX_NATIVE_ID_CHARACTERS: Final = 512
+MAX_XUEQIU_SYMBOL_CHARACTERS: Final = 64
 MAX_AUTHOR_CHARACTERS: Final = 2_048
 MAX_PUBLISHED_CHARACTERS: Final = 512
 
@@ -63,9 +66,77 @@ _YOUTUBE_SUBTITLE_MARKER: Final = "WEBVTT"
 _POSITIVE_DECIMAL: Final = re.compile(r"[1-9][0-9]{0,31}")
 _V2EX_IDENTIFIER: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _REDDIT_POST_ID: Final = re.compile(r"[a-z0-9]{1,32}")
+_XIAOHONGSHU_NOTE_ID: Final = re.compile(r"[0-9a-f]{24}")
+_MAINLAND_STOCK_SYMBOL: Final = re.compile(r"(SH|SZ|BJ)[0-9]{6}")
+_QUALIFIED_STOCK_SYMBOL: Final = re.compile(r"([A-Z]{2,16}):[A-Z0-9]+(?:[.-][A-Z0-9]+)*")
+_STOCK_EXCHANGE: Final = re.compile(r"[A-Z]{2,16}")
 _SOCIAL_USERNAME: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 _SUBREDDIT_IDENTIFIER: Final = re.compile(r"[A-Za-z][A-Za-z0-9_]{2,20}")
 _SHA256: Final = re.compile(r"[0-9a-f]{64}")
+_COOKIE_NAME: Final = re.compile(r"[A-Za-z0-9_]{1,64}")
+_LINKEDIN_ENDPOINT: Final = "http://127.0.0.1:8001/mcp"
+_LINKEDIN_ALIAS_WHEEL_SHA256: Final = (
+    "2173ead9777f6202fd581b4ec227d7a7212e9798f26f530b3174ff4683797558"
+)
+_LINKEDIN_BACKEND_WHEEL_SHA256: Final = (
+    "62a889ac417e5e04d1635d5698df7178edc667a232dca42f417647e2ea25926d"
+)
+_LINKEDIN_RUNTIME_LOCK_SHA256: Final = (
+    "9150a44d903ecfecdc48d115b87385bb78f3c69f4067951cf238e7fda6f09a17"
+)
+_LINKEDIN_SOURCE_COMMIT: Final = "7edbd32231afa6d40fabad207329591ad5a4feb0"
+_LINKEDIN_SCHEMA_SHA256: Final = "2549d379d2306ba22c24f06015db67f448d109943fb96f2d656986d2d92f0699"
+_LINKEDIN_TOOL_TIMEOUT_SECONDS: Final = 12
+_LINKEDIN_REFERENCE_KINDS: Final = frozenset(
+    {
+        "person",
+        "company",
+        "company_urn",
+        "job",
+        "feed_post",
+        "article",
+        "newsletter",
+        "school",
+        "conversation",
+        "external",
+    }
+)
+_LINKEDIN_REFERENCE_CONTEXTS: Final = frozenset(
+    {
+        "about",
+        "experience",
+        "education",
+        "interests",
+        "honors",
+        "languages",
+        "contact info",
+        "job posting",
+        "inbox",
+        "conversation",
+        "job result",
+        "search result",
+        "post author",
+        "company post",
+        "post attachment",
+        "featured",
+        "top card",
+    }
+)
+_LINKEDIN_REFERENCE_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "person": "/in/",
+        "company": "/company/",
+        "school": "/school/",
+        "job": "/jobs/view/",
+        "newsletter": "/newsletters/",
+        "article": "/pulse/",
+        "feed_post": "/feed/update/",
+        "conversation": "/messaging/thread/",
+    }
+)
+_LINKEDIN_COMPANY_URN_URL: Final = re.compile(
+    r"/search/results/people/[?]currentCompany=%5B%22([1-9][0-9]{0,31})%22%5D"
+)
 
 ExecutionErrorCodeV1 = Literal[
     "unsupported_protocol_version",
@@ -309,6 +380,57 @@ class OpenCliSessionV1:
 
 
 @dataclass(frozen=True, slots=True)
+class LinkedInMcpV1:
+    """Closed attestation for the reviewed loopback LinkedIn read service."""
+
+    endpoint: str
+    alias_wheel_sha256: str
+    backend_wheel_sha256: str
+    runtime_lock_sha256: str
+    source_commit: str
+    schema_sha256: str
+    log_level: str
+    tool_timeout_seconds: int
+
+    def __post_init__(self) -> None:
+        if (
+            self.endpoint != _LINKEDIN_ENDPOINT
+            or self.alias_wheel_sha256 != _LINKEDIN_ALIAS_WHEEL_SHA256
+            or self.backend_wheel_sha256 != _LINKEDIN_BACKEND_WHEEL_SHA256
+            or self.runtime_lock_sha256 != _LINKEDIN_RUNTIME_LOCK_SHA256
+            or self.source_commit != _LINKEDIN_SOURCE_COMMIT
+            or self.schema_sha256 != _LINKEDIN_SCHEMA_SHA256
+            or self.log_level not in {"WARNING", "ERROR", "CRITICAL"}
+            or type(self.tool_timeout_seconds) is not int
+            or self.tool_timeout_seconds != _LINKEDIN_TOOL_TIMEOUT_SECONDS
+        ):
+            raise ValueError("invalid LinkedIn MCP attestation")
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class XueqiuSessionV1:
+    """One-attempt Xueqiu Cookie header owned by a trusted host."""
+
+    cookie_header: bytearray = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        value = self.cookie_header
+        if type(value) is not bytearray or not _valid_xueqiu_cookie_header(value):
+            if type(value) is bytearray:
+                value[:] = b"\x00" * len(value)
+            raise ValueError("invalid Xueqiu session")
+        copied = bytearray(value)
+        value[:] = b"\x00" * len(value)
+        object.__setattr__(self, "cookie_header", copied)
+
+    def close(self) -> None:
+        self.cookie_header[:] = b"\x00" * len(self.cookie_header)
+
+    def __repr__(self) -> str:
+        return "XueqiuSessionV1(<redacted>)"
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionLimitsV1:
     """Host-selected limits that may only narrow descriptor hard limits."""
 
@@ -331,6 +453,8 @@ HostCapabilityV1: TypeAlias = (
     | PrivateWorkspaceV1
     | McporterArtifactsV1
     | OpenCliSessionV1
+    | LinkedInMcpV1
+    | XueqiuSessionV1
 )
 
 
@@ -359,6 +483,8 @@ class ExecutionContextV1:
                     PrivateWorkspaceV1,
                     McporterArtifactsV1,
                     OpenCliSessionV1,
+                    LinkedInMcpV1,
+                    XueqiuSessionV1,
                 }
                 for capability in capabilities
             )
@@ -366,6 +492,33 @@ class ExecutionContextV1:
         ):
             raise ValueError("invalid execution context")
         object.__setattr__(self, "host_capabilities", capabilities)
+
+
+def _valid_xueqiu_cookie_header(value: bytearray) -> bool:
+    if not 1 <= len(value) <= 8_192 or 0 in value:
+        return False
+    try:
+        text = value.decode("ascii", errors="strict")
+    except UnicodeError:
+        return False
+    if text != text.strip() or any(
+        ord(character) < 32 or ord(character) == 127 for character in text
+    ):
+        return False
+    names: set[str] = set()
+    for raw_pair in text.split(";"):
+        pair = raw_pair.strip()
+        name, separator, cookie_value = pair.partition("=")
+        if (
+            separator != "="
+            or _COOKIE_NAME.fullmatch(name) is None
+            or not cookie_value
+            or any(character in ";," or character.isspace() for character in cookie_value)
+            or name in names
+        ):
+            return False
+        names.add(name)
+    return "xq_a_token" in names
 
 
 _ResultFieldKind: TypeAlias = Literal["text", "integer"]
@@ -469,6 +622,13 @@ _RESULT_SCHEMA_FIELDS: Final[Mapping[str, Mapping[str, _ResultFieldRule]]] = Map
                 "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
                 "author": _text_rule(MAX_AUTHOR_CHARACTERS, nullable=True),
                 "published_at": _text_rule(MAX_PUBLISHED_CHARACTERS, nullable=True),
+            }
+        ),
+        "exa.code.result.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=False),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
             }
         ),
         "reddit.post.v1": MappingProxyType(
@@ -576,6 +736,51 @@ _RESULT_SCHEMA_FIELDS: Final[Mapping[str, Mapping[str, _ResultFieldRule]]] = Map
                 "reaction_count": _integer_rule(nullable=True),
                 "comment_count": _integer_rule(nullable=True),
                 "media_type": _text_rule(64, nullable=True),
+            }
+        ),
+        "twitter.post.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=True),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "author": _text_rule(MAX_AUTHOR_CHARACTERS, nullable=True),
+                "published_at": _text_rule(MAX_PUBLISHED_CHARACTERS, nullable=True),
+                "reaction_count": _integer_rule(nullable=True),
+                "view_count": _integer_rule(nullable=True),
+                "has_media": _integer_rule(),
+            }
+        ),
+        "xiaohongshu.note.v1": MappingProxyType(
+            {
+                "text": _text_rule(MAX_TEXT_CHARACTERS, nullable=False),
+                "native_id": _text_rule(MAX_NATIVE_ID_CHARACTERS, nullable=False),
+                "title": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "author": _text_rule(MAX_AUTHOR_CHARACTERS, nullable=True),
+                "published_at": _text_rule(MAX_PUBLISHED_CHARACTERS, nullable=True),
+                "reaction_count": _integer_rule(nullable=True),
+            }
+        ),
+        "linkedin.people.search.document.v1": MappingProxyType(
+            {
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "sections": _text_rule(MAX_TEXT_CHARACTERS, nullable=False),
+                "references": _text_rule(MAX_TEXT_CHARACTERS, nullable=True),
+            }
+        ),
+        "linkedin.jobs.search.document.v1": MappingProxyType(
+            {
+                "url": _text_rule(MAX_URL_CHARACTERS, nullable=False),
+                "sections": _text_rule(MAX_TEXT_CHARACTERS, nullable=False),
+                "references": _text_rule(MAX_TEXT_CHARACTERS, nullable=True),
+                "job_ids": _text_rule(MAX_TEXT_CHARACTERS, nullable=False),
+            }
+        ),
+        "xueqiu.stock.v1": MappingProxyType(
+            {
+                "symbol": _text_rule(MAX_XUEQIU_SYMBOL_CHARACTERS, nullable=False),
+                "name": _text_rule(MAX_TITLE_CHARACTERS, nullable=False),
+                "exchange": _text_rule(64, nullable=False),
             }
         ),
     }
@@ -729,6 +934,15 @@ _EXPECTED_SUCCESS_CONTRACT: Final[Mapping[tuple[str, str], _ExpectedSuccessContr
                 frozenset(),
                 _MAX_EXA_OUTPUT_BYTES,
             ),
+            ("exa", "search.code"): (
+                "exa-mcporter",
+                "0.12.3+exa-code.v1",
+                ("exa.code.result.v1",),
+                0,
+                20,
+                frozenset(),
+                _MAX_EXA_OUTPUT_BYTES,
+            ),
             ("reddit", "search.posts"): (
                 "opencli",
                 "1.8.6-hermes.1",
@@ -864,6 +1078,51 @@ _EXPECTED_SUCCESS_CONTRACT: Final[Mapping[tuple[str, str], _ExpectedSuccessContr
                 frozenset(),
                 _MAX_OPENCLI_OUTPUT_BYTES,
             ),
+            ("twitter", "search.posts"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("twitter.post.v1",),
+                0,
+                50,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("xiaohongshu", "search.notes"): (
+                "opencli",
+                "1.8.6-hermes.1",
+                ("xiaohongshu.note.v1",),
+                0,
+                50,
+                frozenset(),
+                _MAX_OPENCLI_OUTPUT_BYTES,
+            ),
+            ("linkedin", "search.people"): (
+                "linkedin-scraper-mcp",
+                "4.14.0",
+                ("linkedin.people.search.document.v1",),
+                1,
+                1,
+                frozenset(),
+                _MAX_EXA_OUTPUT_BYTES,
+            ),
+            ("linkedin", "search.jobs"): (
+                "linkedin-scraper-mcp",
+                "4.14.0",
+                ("linkedin.jobs.search.document.v1",),
+                1,
+                1,
+                frozenset(),
+                _MAX_EXA_OUTPUT_BYTES,
+            ),
+            ("xueqiu", "search.stocks"): (
+                "xueqiu-api",
+                "1.5.0+search.v1",
+                ("xueqiu.stock.v1",),
+                0,
+                50,
+                frozenset(),
+                MAX_OUTPUT_BYTES,
+            ),
         }
     )
 )
@@ -954,9 +1213,11 @@ class ExecutionSuccessV1:
             or (self.source == "v2ex" and any(not _valid_v2ex_item(item) for item in items))
             or (self.source == "exa" and any(not _valid_exa_item(item) for item in items))
             or (
-                self.source in {"reddit", "facebook", "instagram"}
+                self.source in {"reddit", "facebook", "instagram", "twitter", "xiaohongshu"}
                 and not _valid_opencli_social_result((self.source, self.operation), items)
             )
+            or (self.source == "linkedin" and any(not _valid_linkedin_item(item) for item in items))
+            or (self.source == "xueqiu" and not _valid_xueqiu_items(items))
             or _result_payload_size(items) > maximum_output_bytes
         ):
             raise ValueError("invalid execution success")
@@ -1295,6 +1556,22 @@ def _valid_opencli_social_result(
             and item.fields.get("private") in {0, 1}
             for item in items
         )
+    if key == ("twitter", "search.posts"):
+        return _unique_native_ids(items) and all(
+            type(item.fields.get("native_id")) is str
+            and _POSITIVE_DECIMAL.fullmatch(cast(str, item.fields["native_id"]))
+            and item.fields.get("url") == f"https://x.com/i/status/{item.fields['native_id']}"
+            and item.fields.get("has_media") in {0, 1}
+            for item in items
+        )
+    if key == ("xiaohongshu", "search.notes"):
+        return _unique_native_ids(items) and all(
+            type(item.fields.get("native_id")) is str
+            and _XIAOHONGSHU_NOTE_ID.fullmatch(cast(str, item.fields["native_id"]))
+            and item.fields.get("url")
+            == f"https://www.xiaohongshu.com/explore/{item.fields['native_id']}"
+            for item in items
+        )
     return key in {
         ("facebook", "browse.feed"),
         ("instagram", "browse.user_posts"),
@@ -1362,9 +1639,260 @@ def _reddit_post_id_from_url(value: object) -> str | None:
 
 
 def _valid_exa_item(item: ExecutionItemV1) -> bool:
-    if item.schema_id != "exa.search.result.v1":
+    if item.schema_id not in {"exa.search.result.v1", "exa.code.result.v1"}:
         return False
     return _valid_public_result_url(item.fields.get("url"))
+
+
+def _valid_linkedin_item(item: ExecutionItemV1) -> bool:
+    url = item.fields.get("url")
+    if not _valid_public_result_url(url) or type(url) is not str:
+        return False
+    parsed = urlsplit(url)
+    expected_path = {
+        "linkedin.people.search.document.v1": "/search/results/people/",
+        "linkedin.jobs.search.document.v1": "/jobs/search/",
+    }.get(item.schema_id)
+    if (
+        expected_path is None
+        or parsed.scheme != "https"
+        or parsed.hostname != "www.linkedin.com"
+        or parsed.port not in {None, 443}
+        or parsed.path != expected_path
+        or parsed.fragment
+    ):
+        return False
+    try:
+        query = parse_qs(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=1,
+        )
+    except ValueError:
+        return False
+    if set(query) != {"keywords"} or len(query["keywords"]) != 1:
+        return False
+    keywords = query["keywords"][0]
+    if (
+        not keywords
+        or keywords != keywords.strip()
+        or len(keywords) > _MAX_BILIBILI_QUERY_CHARACTERS
+        or _contains_invalid_scalar(keywords)
+        or parsed.query != f"keywords={quote_plus(keywords)}"
+    ):
+        return False
+    sections = _closed_json_text(item.fields.get("sections"))
+    if not isinstance(sections, dict):
+        return False
+    if sections and (
+        set(sections) != {"search_results"}
+        or type(sections["search_results"]) is not str
+        or not sections["search_results"]
+        or _contains_invalid_scalar(sections["search_results"])
+    ):
+        return False
+    references = item.fields.get("references")
+    if references is not None and not _valid_linkedin_references(_closed_json_text(references)):
+        return False
+    if item.schema_id == "linkedin.jobs.search.document.v1":
+        job_ids = item.fields.get("job_ids")
+        if not _valid_linkedin_job_ids(_closed_json_text(job_ids)):
+            return False
+    return True
+
+
+def _closed_json_text(value: object) -> object:
+    if type(value) is not str:
+        return None
+
+    def object_from_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        selected: dict[str, object] = {}
+        for key, child in pairs:
+            if key in selected:
+                raise ValueError("duplicate JSON key")
+            selected[key] = child
+        return selected
+
+    try:
+        decoded = json.loads(
+            value,
+            object_pairs_hook=object_from_pairs,
+            parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
+        )
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    try:
+        canonical = json.dumps(
+            decoded,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError):
+        return None
+    return decoded if canonical == value else None
+
+
+def _valid_linkedin_references(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != {"search_results"}:
+        return False
+    references = value["search_results"]
+    if not isinstance(references, list) or len(references) > 15:
+        return False
+    urls: set[str] = set()
+    for reference in references:
+        selected = _linkedin_reference_fields(reference)
+        if selected is None or selected["url"] in urls:
+            return False
+        urls.add(selected["url"])
+    return True
+
+
+def _linkedin_reference_fields(value: object) -> dict[str, str] | None:
+    if type(value) is not dict or any(type(key) is not str for key in value):
+        return None
+    reference = cast(dict[str, object], value)
+    if not {"kind", "url"}.issubset(reference) or not set(reference).issubset(
+        {"kind", "url", "text", "context", "value"}
+    ):
+        return None
+    kind = reference["kind"]
+    url = reference["url"]
+    if (
+        type(kind) is not str
+        or kind not in _LINKEDIN_REFERENCE_KINDS
+        or type(url) is not str
+        or not _valid_linkedin_reference_url(kind, url, reference.get("value"))
+    ):
+        return None
+    selected = {"kind": kind, "url": url}
+    text = reference.get("text")
+    if text is not None:
+        if (
+            kind == "company_urn"
+            or type(text) is not str
+            or text != text.strip()
+            or not 2 <= len(text) <= 80
+            or _contains_invalid_scalar(text)
+        ):
+            return None
+        selected["text"] = text
+    context = reference.get("context")
+    if context is not None:
+        if type(context) is not str or context not in _LINKEDIN_REFERENCE_CONTEXTS:
+            return None
+        selected["context"] = context
+    urn_value = reference.get("value")
+    if kind == "company_urn":
+        if type(urn_value) is not str:
+            return None
+        selected["value"] = urn_value
+    elif urn_value is not None:
+        return None
+    return selected
+
+
+def _valid_linkedin_reference_url(kind: str, value: str, urn_value: object) -> bool:
+    if (
+        not value
+        or value != value.strip()
+        or len(value) > MAX_URL_CHARACTERS
+        or _contains_invalid_scalar(value)
+    ):
+        return False
+    if kind == "external":
+        if urn_value is not None or not _valid_public_result_url(value):
+            return False
+        parsed = urlsplit(value)
+        return not parsed.query and not parsed.fragment
+    if not value.isascii():
+        return False
+    if kind == "company_urn":
+        match = _LINKEDIN_COMPANY_URN_URL.fullmatch(value)
+        return bool(match is not None and type(urn_value) is str and urn_value == match.group(1))
+    prefix = _LINKEDIN_REFERENCE_PREFIXES.get(kind)
+    if prefix is None or not value.startswith(prefix) or not value.endswith("/"):
+        return False
+    segment = value[len(prefix) : -1]
+    if kind == "job":
+        return _POSITIVE_DECIMAL.fullmatch(segment) is not None
+    return _valid_linkedin_reference_segment(segment)
+
+
+def _valid_linkedin_reference_segment(value: str) -> bool:
+    if not 1 <= len(value) <= 512 or not value[0].isalnum():
+        return False
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if character == "%":
+            if index + 2 >= len(value) or any(
+                child not in "0123456789ABCDEF" for child in value[index + 1 : index + 3]
+            ):
+                return False
+            index += 3
+            continue
+        if not (character.isalnum() or character in "-._~:"):
+            return False
+        index += 1
+    return True
+
+
+def _valid_linkedin_job_ids(value: object) -> bool:
+    if not isinstance(value, list) or len(value) > 50:
+        return False
+    seen: set[str] = set()
+    for job_id in value:
+        if type(job_id) is not str or _POSITIVE_DECIMAL.fullmatch(job_id) is None or job_id in seen:
+            return False
+        seen.add(job_id)
+    return True
+
+
+def _unique_native_ids(items: tuple[ExecutionItemV1, ...]) -> bool:
+    values = tuple(item.fields.get("native_id") for item in items)
+    return len(values) == len(set(values))
+
+
+def _valid_xueqiu_items(items: tuple[ExecutionItemV1, ...]) -> bool:
+    symbols: set[str] = set()
+    for item in items:
+        symbol = item.fields.get("symbol")
+        exchange = item.fields.get("exchange")
+        if (
+            item.schema_id != "xueqiu.stock.v1"
+            or type(symbol) is not str
+            or symbol in symbols
+            or type(exchange) is not str
+            or not _valid_xueqiu_stock_identity(symbol, exchange)
+        ):
+            return False
+        symbols.add(symbol)
+    return True
+
+
+def _valid_xueqiu_stock_identity(symbol: object, exchange: object) -> bool:
+    if (
+        type(symbol) is not str
+        or not symbol.isascii()
+        or symbol != symbol.strip()
+        or not 1 <= len(symbol) <= MAX_XUEQIU_SYMBOL_CHARACTERS
+        or _contains_invalid_scalar(symbol)
+        or type(exchange) is not str
+        or not exchange.isascii()
+        or exchange != exchange.strip()
+        or _STOCK_EXCHANGE.fullmatch(exchange) is None
+        or _contains_invalid_scalar(exchange)
+    ):
+        return False
+    mainland = _MAINLAND_STOCK_SYMBOL.fullmatch(symbol)
+    if mainland is not None:
+        prefix = mainland.group(1)
+        return exchange in {prefix, f"{prefix}A"}
+    qualified = _QUALIFIED_STOCK_SYMBOL.fullmatch(symbol)
+    return qualified is not None and qualified.group(1) == exchange
 
 
 def _valid_public_result_url(value: object) -> bool:

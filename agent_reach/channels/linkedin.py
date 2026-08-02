@@ -12,7 +12,7 @@ _LINKEDIN_SERVER_NAMES = {"linkedin", "linkedin-scraper", "linkedin-scraper-mcp"
 class LinkedInChannel(Channel):
     name = "linkedin"
     description = "LinkedIn 职业社交"
-    backends = ["linkedin-scraper-mcp", "Jina Reader"]
+    backends = ["linkedin-scraper-mcp"]
     tier = 2
 
     def can_handle(self, url: str) -> bool:
@@ -24,10 +24,13 @@ class LinkedInChannel(Channel):
         self.active_backend = None
         if not shutil.which("mcporter"):
             return "off", (
-                "基本内容可通过 Jina Reader 读取。完整功能需要：\n"
-                "  pip install linkedin-scraper-mcp\n"
-                "  mcporter config add linkedin http://localhost:3000/mcp "
+                "LinkedIn 搜索需要固定的本机 MCP 服务，没有网页读取 fallback：\n"
+                "  pip install linkedin-scraper-mcp==4.14.0 "
+                "mcp-server-linkedin==4.14.0\n"
+                "  mcporter config add linkedin http://127.0.0.1:8001/mcp "
                 "--scope home\n"
+                "  执行时还需按操作使用仅允许 search_people 或 search_jobs 的配置，"
+                "服务工具超时固定为 12 秒，日志级别至少为 WARNING。\n"
                 "  详见 https://github.com/stickerdaniel/linkedin-mcp-server"
             )
         try:
@@ -46,7 +49,10 @@ class LinkedInChannel(Channel):
             )
         return "off", (
             "mcporter 已装但 LinkedIn MCP 未配置。运行：\n"
-            "  pip install linkedin-scraper-mcp\n"
-            "  mcporter config add linkedin http://localhost:3000/mcp "
-            "--scope home"
+            "  pip install linkedin-scraper-mcp==4.14.0 "
+            "mcp-server-linkedin==4.14.0\n"
+            "  mcporter config add linkedin http://127.0.0.1:8001/mcp "
+            "--scope home\n"
+            "  执行时还需按操作使用仅允许 search_people 或 search_jobs 的配置，"
+            "服务工具超时固定为 12 秒，日志级别至少为 WARNING。"
         )
