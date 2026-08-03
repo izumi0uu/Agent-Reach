@@ -66,6 +66,8 @@ jobs:
               "agent_reach/execution/v1/exa.py",
               "agent_reach/execution/v1/opencli_social.py",
               "agent_reach/execution/v1/_opencli_no_lifecycle.mjs",
+              "agent_reach/execution/v1/linkedin.py",
+              "agent_reach/execution/v1/xueqiu.py",
           )
           for name in required_execution_files:
               assert name in names, f"{name} missing from wheel"
@@ -99,18 +101,22 @@ jobs:
           import agent_reach.execution.v1 as execution_v1
           from agent_reach.execution.v1 import (
               MCPORTER_ARTIFACTS_CAPABILITY,
+              LINKEDIN_MCP_CAPABILITY,
               NETWORK_ACCESS_CAPABILITY,
               OPENCLI_SESSION_CAPABILITY,
               PRIVATE_WORKSPACE_CAPABILITY,
               PROTOCOL_VERSION,
+              XUEQIU_SESSION_CAPABILITY,
               ExecutionContextV1,
               ExecutionLimitsV1,
               ExecutionRequestV1,
               ExecutionSuccessV1,
               McporterArtifactsV1,
+              LinkedInMcpV1,
               NetworkAccessV1,
               OpenCliSessionV1,
               PrivateWorkspaceV1,
+              XueqiuSessionV1,
               execute,
               list_capabilities,
           )
@@ -122,20 +128,28 @@ jobs:
               "agent_reach.execution.v1._v2ex_transport",
               "agent_reach.execution.v1.exa",
               "agent_reach.execution.v1.opencli_social",
+              "agent_reach.execution.v1.linkedin",
+              "agent_reach.execution.v1.xueqiu",
           }
           assert runtime_modules.isdisjoint(sys.modules)
           assert "deno" not in sys.modules
           assert {
               "MCPORTER_ARTIFACTS_CAPABILITY",
+              "LINKEDIN_MCP_CAPABILITY",
               "OPENCLI_SESSION_CAPABILITY",
               "PRIVATE_WORKSPACE_CAPABILITY",
+              "XUEQIU_SESSION_CAPABILITY",
+              "LinkedInMcpV1",
               "McporterArtifactsV1",
               "OpenCliSessionV1",
               "PrivateWorkspaceV1",
+              "XueqiuSessionV1",
           } <= set(execution_v1.__all__)
+          assert execution_v1.LinkedInMcpV1 is LinkedInMcpV1
           assert execution_v1.McporterArtifactsV1 is McporterArtifactsV1
           assert execution_v1.OpenCliSessionV1 is OpenCliSessionV1
           assert execution_v1.PrivateWorkspaceV1 is PrivateWorkspaceV1
+          assert execution_v1.XueqiuSessionV1 is XueqiuSessionV1
 
           def loaded_backend_modules():
               return tuple(
@@ -179,6 +193,12 @@ jobs:
               ("instagram", "read.profile"),
               ("instagram", "browse.user_posts"),
               ("instagram", "browse.explore"),
+              ("twitter", "search.posts"),
+              ("xiaohongshu", "search.notes"),
+              ("linkedin", "search.people"),
+              ("linkedin", "search.jobs"),
+              ("xueqiu", "search.stocks"),
+              ("exa", "search.code"),
           )
           expected_new_capabilities = {
               ("youtube", "search.videos"): (
@@ -237,6 +257,38 @@ jobs:
                   (NETWORK_ACCESS_CAPABILITY, MCPORTER_ARTIFACTS_CAPABILITY),
                   20,
               ),
+              ("linkedin", "search.people"): (
+                  "linkedin.search.people.arguments.v1",
+                  ("linkedin.people.search.document.v1",),
+                  "linkedin-scraper-mcp",
+                  "4.14.0",
+                  (MCPORTER_ARTIFACTS_CAPABILITY, LINKEDIN_MCP_CAPABILITY),
+                  1,
+              ),
+              ("linkedin", "search.jobs"): (
+                  "linkedin.search.jobs.arguments.v1",
+                  ("linkedin.jobs.search.document.v1",),
+                  "linkedin-scraper-mcp",
+                  "4.14.0",
+                  (MCPORTER_ARTIFACTS_CAPABILITY, LINKEDIN_MCP_CAPABILITY),
+                  1,
+              ),
+              ("xueqiu", "search.stocks"): (
+                  "xueqiu.search.stocks.arguments.v1",
+                  ("xueqiu.stock.v1",),
+                  "xueqiu-api",
+                  "1.5.0+search.v1",
+                  (XUEQIU_SESSION_CAPABILITY,),
+                  50,
+              ),
+              ("exa", "search.code"): (
+                  "exa.search.code.arguments.v1",
+                  ("exa.code.result.v1",),
+                  "exa-mcporter",
+                  "0.12.3+exa-code.v1",
+                  (NETWORK_ACCESS_CAPABILITY, MCPORTER_ARTIFACTS_CAPABILITY),
+                  20,
+              ),
           }
           expected_new_capabilities.update(
               {
@@ -264,6 +316,8 @@ jobs:
                       ("instagram", "read.profile", "instagram.profile.v1", 1),
                       ("instagram", "browse.user_posts", "instagram.post.v1", 50),
                       ("instagram", "browse.explore", "instagram.post.v1", 50),
+                      ("twitter", "search.posts", "twitter.post.v1", 50),
+                      ("xiaohongshu", "search.notes", "xiaohongshu.note.v1", 50),
                   )
               }
           )
@@ -285,8 +339,10 @@ jobs:
 
           import agent_reach.execution.v1._v2ex_transport as v2ex_transport
           import agent_reach.execution.v1.exa as exa_execution
+          import agent_reach.execution.v1.linkedin as linkedin_execution
           import agent_reach.execution.v1.opencli_social as opencli_execution
           import agent_reach.execution.v1.v2ex as v2ex_execution
+          import agent_reach.execution.v1.xueqiu as xueqiu_execution
           import agent_reach.execution.v1.youtube as youtube_execution
 
           package_file = Path(agent_reach.__file__).resolve()
@@ -297,6 +353,8 @@ jobs:
               v2ex_transport: "_v2ex_transport.py",
               exa_execution: "exa.py",
               opencli_execution: "opencli_social.py",
+              linkedin_execution: "linkedin.py",
+              xueqiu_execution: "xueqiu.py",
           }
           for module, name in expected_runtime_files.items():
               assert Path(module.__file__).resolve() == package_file.parent / "execution" / "v1" / name
@@ -334,9 +392,14 @@ jobs:
               (v2ex_execution.execute_v2ex, "agent_reach.execution.v1.v2ex"),
               (exa_execution.execute_exa, "agent_reach.execution.v1.exa"),
               (
+                  linkedin_execution.execute_linkedin,
+                  "agent_reach.execution.v1.linkedin",
+              ),
+              (
                   opencli_execution.execute_opencli_social,
                   "agent_reach.execution.v1.opencli_social",
               ),
+              (xueqiu_execution.execute_xueqiu, "agent_reach.execution.v1.xueqiu"),
           ):
               assert function.__module__ == module_name
               assert str(signature(function)) == expected_signature
@@ -436,5 +499,5 @@ jobs:
           assert downloader.params["remote_components"] == []
           assert plugin_dirs.value == []
           assert os.environ["YTDLP_NO_PLUGINS"] == "1"
-          print("installed wheel exposes 29 descriptors and closed execution runtimes OK")
+          print("installed wheel exposes 35 descriptors and closed execution runtimes OK")
           PY
