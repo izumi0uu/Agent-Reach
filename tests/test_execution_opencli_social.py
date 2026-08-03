@@ -741,6 +741,22 @@ def test_all_seventeen_operations_use_fixed_argv_and_closed_projection(
     )
 
 
+def test_twitter_native_only_bio_does_not_report_result_truncation() -> None:
+    case = next(
+        candidate
+        for candidate in _operation_cases()
+        if (candidate.source, candidate.operation) == ("twitter", "search.posts")
+    )
+    row = dict(case.rows[0])
+    row["bio"] = "B" * 256
+    state = opencli._ProjectionState()
+
+    items = opencli._project_twitter_posts((row,), 32, state)
+
+    assert len(items) == 1
+    assert state.truncated is False
+
+
 @pytest.mark.parametrize(
     ("source", "operation", "arguments"),
     [
@@ -836,7 +852,7 @@ def test_new_search_native_drift_fails_closed(
     elif mutation == "wrong-author-host":
         row["author_url"] = "https://example.com/user/profile/abc?xsec_token=SECRET"
     elif mutation == "session-field":
-        row["xsec_token"] = "SECRET"
+        row["xsec_token"] = "SECRET"  # noqa: S105 -- fixture value
     elif mutation == "duplicate-id":
         rows = (row, dict(row))
     else:  # pragma: no cover - the parameter table is exhaustive

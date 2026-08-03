@@ -467,6 +467,19 @@ def test_transport_uses_only_fixed_origin_path_query_and_one_cookie_header() -> 
     assert b"homepage" not in request.lower()
 
 
+def test_request_host_header_follows_the_pinned_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(xueqiu_execution, "_ORIGIN_HOST", "stocks.example.com")
+    cookie = bytearray(b"xq_a_token=secret")
+    request = xueqiu_execution._request_bytes("/stock/search.json?code=600519&size=1", cookie)
+    try:
+        assert b"\r\nHost: stocks.example.com\r\n" in request
+    finally:
+        request[:] = b"\x00" * len(request)
+        cookie[:] = b"\x00" * len(cookie)
+
+
 def test_transport_cancellation_interrupts_blocking_dns_without_exchange(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
