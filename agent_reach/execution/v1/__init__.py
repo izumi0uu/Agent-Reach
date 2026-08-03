@@ -3,7 +3,6 @@
 from .contracts import (
     EXECUTION_ERROR_CODES,
     FETCHED_DOCUMENT_CAPABILITY,
-    LINKEDIN_MCP_CAPABILITY,
     MCPORTER_ARTIFACTS_CAPABILITY,
     NETWORK_ACCESS_CAPABILITY,
     OPENCLI_SESSION_CAPABILITY,
@@ -19,7 +18,6 @@ from .contracts import (
     ExecutionResultV1,
     ExecutionSuccessV1,
     FetchedDocumentV1,
-    LinkedInMcpV1,
     McporterArtifactsV1,
     NetworkAccessV1,
     OpenCliSessionV1,
@@ -32,7 +30,6 @@ from .registry import execute, list_capabilities
 __all__ = [
     "EXECUTION_ERROR_CODES",
     "FETCHED_DOCUMENT_CAPABILITY",
-    "LINKEDIN_MCP_CAPABILITY",
     "MCPORTER_ARTIFACTS_CAPABILITY",
     "NETWORK_ACCESS_CAPABILITY",
     "OPENCLI_SESSION_CAPABILITY",
@@ -48,7 +45,6 @@ __all__ = [
     "ExecutionResultV1",
     "ExecutionSuccessV1",
     "FetchedDocumentV1",
-    "LinkedInMcpV1",
     "McporterArtifactsV1",
     "NetworkAccessV1",
     "OpenCliSessionV1",

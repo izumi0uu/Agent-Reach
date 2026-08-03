@@ -18,7 +18,6 @@ from .contracts import (
     _SUBREDDIT_IDENTIFIER,
     _YOUTUBE_SUBTITLE_MARKER,
     FETCHED_DOCUMENT_CAPABILITY,
-    LINKEDIN_MCP_CAPABILITY,
     MAX_AUTHOR_CHARACTERS,
     MAX_CONTENT_LOCATION_CHARACTERS,
     MAX_CONTENT_TYPE_CHARACTERS,
@@ -43,7 +42,6 @@ from .contracts import (
     ExecutionResultV1,
     FetchedDocumentV1,
     HostCapabilityV1,
-    LinkedInMcpV1,
     McporterArtifactsV1,
     NetworkAccessV1,
     OpenCliSessionV1,
@@ -396,34 +394,6 @@ _CAPABILITIES: Final = (
         maximum_items=50,
     ),
     _capability(
-        source="linkedin",
-        operation="search.people",
-        argument_schema_id="linkedin.search.people.arguments.v1",
-        result_schema_ids=("linkedin.people.search.document.v1",),
-        backend_id="linkedin-scraper-mcp",
-        backend_version="4.14.0",
-        required_host_capabilities=(
-            MCPORTER_ARTIFACTS_CAPABILITY,
-            LINKEDIN_MCP_CAPABILITY,
-        ),
-        maximum_items=1,
-        maximum_output_bytes=_MAX_EXA_OUTPUT_BYTES,
-    ),
-    _capability(
-        source="linkedin",
-        operation="search.jobs",
-        argument_schema_id="linkedin.search.jobs.arguments.v1",
-        result_schema_ids=("linkedin.jobs.search.document.v1",),
-        backend_id="linkedin-scraper-mcp",
-        backend_version="4.14.0",
-        required_host_capabilities=(
-            MCPORTER_ARTIFACTS_CAPABILITY,
-            LINKEDIN_MCP_CAPABILITY,
-        ),
-        maximum_items=1,
-        maximum_output_bytes=_MAX_EXA_OUTPUT_BYTES,
-    ),
-    _capability(
         source="xueqiu",
         operation="search.stocks",
         argument_schema_id="xueqiu.search.stocks.arguments.v1",
@@ -541,10 +511,6 @@ def _execute(
         from .opencli_social import execute_opencli_social
 
         return execute_opencli_social(request, context)
-    if request.source == "linkedin":
-        from .linkedin import execute_linkedin
-
-        return execute_linkedin(request, context)
     if request.source == "xueqiu":
         from .xueqiu import execute_xueqiu
 
@@ -655,11 +621,6 @@ def _valid_arguments(
         ("xiaohongshu", "search.notes"),
     } and set(arguments) == {"query", "limit"}:
         return _valid_query_and_limit(arguments, maximum_limit=capability.maximum_items)
-    if key in {
-        ("linkedin", "search.people"),
-        ("linkedin", "search.jobs"),
-    } and set(arguments) == {"query", "limit"}:
-        return _valid_query_and_limit(arguments, maximum_limit=50)
     if key == ("xueqiu", "search.stocks") and set(arguments) == {"query", "limit"}:
         return _valid_query_and_limit(arguments, maximum_limit=capability.maximum_items)
     if key == ("reddit", "read.post") and set(arguments) == {"url"}:
@@ -757,8 +718,6 @@ def _host_capability_id(capability: HostCapabilityV1) -> str:
         return MCPORTER_ARTIFACTS_CAPABILITY
     if type(capability) is OpenCliSessionV1:
         return OPENCLI_SESSION_CAPABILITY
-    if type(capability) is LinkedInMcpV1:
-        return LINKEDIN_MCP_CAPABILITY
     if type(capability) is XueqiuSessionV1:
         return XUEQIU_SESSION_CAPABILITY
     raise AssertionError("unreachable host capability")

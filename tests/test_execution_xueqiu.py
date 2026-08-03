@@ -208,9 +208,9 @@ def _install_fake_network(
     monkeypatch.setattr(
         xueqiu_execution.http.client,
         "HTTPResponse",
-        lambda selected_socket: response
-        if selected_socket is tls_socket
-        else pytest.fail("unexpected response socket"),
+        lambda selected_socket: (
+            response if selected_socket is tls_socket else pytest.fail("unexpected response socket")
+        ),
     )
     return raw_socket, tls_socket, response
 
