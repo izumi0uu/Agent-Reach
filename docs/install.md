@@ -288,10 +288,10 @@ agent-reach configure groq-key gsk_xxxxx
 > - 2 小时以上的播客建议分批处理
 
 **LinkedIn (可选 — linkedin-scraper-mcp):**
-> LinkedIn 人才和职位搜索只使用受信任本机的固定 MCP 服务；Jina Reader 不是搜索 fallback。
+> "LinkedIn 基本内容可通过 Jina Reader 读取。完整功能（Profile 详情、职位搜索）需要 linkedin-scraper-mcp。"
 
 ```bash
-pip install linkedin-scraper-mcp==4.14.0 mcp-server-linkedin==4.14.0
+pip install linkedin-scraper-mcp
 ```
 
 > **登录方式（需要浏览器界面）：**
@@ -321,11 +321,8 @@ pip install linkedin-scraper-mcp==4.14.0 mcp-server-linkedin==4.14.0
 > **登录后启动 MCP 服务：**
 > ```bash
 > linkedin-scraper-mcp --transport streamable-http --port 8001
-> mcporter config add linkedin http://127.0.0.1:8001/mcp --scope home
+> mcporter config add linkedin http://localhost:8001/mcp --scope home
 > ```
-> 服务工具超时必须固定为 12 秒，日志级别必须为 `WARNING`、`ERROR` 或
-> `CRITICAL`。执行时分别使用只允许 `search_people` 或 `search_jobs` 的配置；
-> 参数为 `keywords`，职位搜索的 `max_pages` 固定为 `1`。
 >
 > 详见 https://github.com/stickerdaniel/linkedin-mcp-server
 
@@ -383,7 +380,7 @@ After installation, use upstream tools directly. See SKILL.md for the full comma
 | Exa Search | `mcporter` | `mcporter call 'exa.web_search_exa(...)'` |
 | 小红书 | `opencli`（服务器 `mcporter`） | `opencli xiaohongshu search "query" -f yaml` |
 | 小宇宙播客 | `transcribe.sh` | `bash ~/.agent-reach/tools/xiaoyuzhou/transcribe.sh <URL>` |
-| LinkedIn | `mcporter` | `mcporter call 'linkedin.search_people(keywords: "...")'` |
+| LinkedIn | `mcporter` | `mcporter call 'linkedin.get_person_profile(...)'` |
 | RSS | `feedparser` | `python3 -c "import feedparser; ..."` |
 
 > 多后端平台以 `agent-reach doctor --json` 的 `active_backend` 为准。

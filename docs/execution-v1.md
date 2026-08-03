@@ -13,7 +13,6 @@ from agent_reach.execution.v1 import (
     ExecutionContextV1,
     ExecutionRequestV1,
     FetchedDocumentV1,
-    LinkedInMcpV1,
     McporterArtifactsV1,
     NetworkAccessV1,
     OpenCliSessionV1,
@@ -78,7 +77,7 @@ reddit_result = execute(
 )
 ```
 
-The v1 registry contains thirty-five operations:
+The v1 registry contains thirty-three operations:
 
 - `rss:read.feed` and `rss:browse.entries`
 - `bilibili:search.videos`, `bilibili:read.video`, `bilibili:browse.hot`, and
@@ -96,7 +95,6 @@ The v1 registry contains thirty-five operations:
 - `instagram:search.users`, `instagram:read.profile`,
   `instagram:browse.user_posts`, and `instagram:browse.explore`
 - `twitter:search.posts` and `xiaohongshu:search.notes`
-- `linkedin:search.people` and `linkedin:search.jobs`
 - `xueqiu:search.stocks`
 - `exa:search.code`
 
@@ -184,55 +182,6 @@ canonical JSON on stdin. The child receives a sterile environment, bounded
 concurrent pipes, and process-group kill-and-reap cleanup. Exa receives the
 query and may retain it; hosts must not describe either route as
 provider-private or no-query-log.
-
-### LinkedIn search execution
-
-The two LinkedIn operations require `McporterArtifactsV1` followed by one
-`LinkedInMcpV1`. The service attestation closes the backend to
-`linkedin-scraper-mcp==4.14.0` and its actual executable distribution
-`mcp-server-linkedin==4.14.0`, reviewed source commit
-`7edbd32231afa6d40fabad207329591ad5a4feb0`, schema SHA-256
-`2549d379d2306ba22c24f06015db67f448d109943fb96f2d656986d2d92f0699`,
-and loopback endpoint `http://127.0.0.1:8001/mcp`. The compatibility-wheel,
-code-wheel, and runtime-lock SHA-256 values are respectively:
-
-```text
-2173ead9777f6202fd581b4ec227d7a7212e9798f26f530b3174ff4683797558
-62a889ac417e5e04d1635d5698df7178edc667a232dca42f417647e2ea25926d
-9150a44d903ecfecdc48d115b87385bb78f3c69f4067951cf238e7fda6f09a17
-```
-
-Operator activation must configure the service tool timeout to exactly 12
-seconds and its log threshold to `WARNING`, `ERROR`, or `CRITICAL`; upstream
-`INFO` records search terms. Mcporter itself is invoked with a fixed 14-second
-outer timeout and log level `error`. The service may expose other tools, but
-the runtime validates one of two exact, operation-specific mcporter config
-files before each call:
-
-```json
-{"imports":[],"mcpServers":{"linkedin":{"allowedTools":["search_people"],"baseUrl":"http://127.0.0.1:8001/mcp"}}}
-```
-
-```json
-{"imports":[],"mcpServers":{"linkedin":{"allowedTools":["search_jobs"],"baseUrl":"http://127.0.0.1:8001/mcp"}}}
-```
-
-Their SHA-256 values are
-`bde84482cda676b21d6a2c10ceef2ad8ea76106a35b73fbf05dbd79c168a70a5`
-for people and
-`917b75d814de1e44021c21966b1887aca5dc7281069a67ef60b26b700be1a36b`
-for jobs. Imports are empty and each allowlist contains exactly the selected
-read tool. The call uses the configured `linkedin` server; callers cannot
-replace it with an ad hoc endpoint, method, or MCP definition.
-
-People receives only `{"keywords": QUERY}`. Jobs receives only
-`{"keywords": QUERY, "max_pages": 1}`. The public `limit` is never passed to
-the backend; it only bounds returned references and job IDs. Each success is
-one validated native search document containing a canonical search URL,
-canonical JSON sections, optional reviewed references, and, for jobs, ordered
-numeric job IDs. The local service retains browser and login state. Jina
-Reader, generic MCP configuration, and the service's write tools are not
-fallbacks.
 
 ### Xueqiu stock search execution
 
@@ -357,12 +306,15 @@ to the host instead of being converted into a backend result.
 
 `list_capabilities()` is static. It does not import `feedparser`, `bili_cli`,
 `yt_dlp`, `yt_dlp_ejs`, `deno`, `httpcore`, or an MCP client; inspect
-configuration, artifacts, or session capabilities; load the Exa, LinkedIn,
-Xueqiu, or OpenCLI social runtime; resolve DNS or secrets; access the network
+configuration, artifacts, or session capabilities; load the Exa, Xueqiu, or
+OpenCLI social runtime; resolve DNS or secrets; access the network
 or filesystem; or start a process. Hosts should validate the exact protocol,
 descriptors, schemas, limits, backend identity, dependency commit, and
 installed backend version before enabling an operation. A newly published
 capability is not authority for a host to enable it automatically.
+
+The official 1.5.0 LinkedIn channel remains unchanged, but LinkedIn is not an
+`execution.v1` capability and has no structured runtime or descriptor.
 
 ## Fork update discipline
 

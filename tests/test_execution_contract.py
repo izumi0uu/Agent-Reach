@@ -14,10 +14,10 @@ from types import MappingProxyType
 
 import pytest
 
+import agent_reach.execution.v1 as execution_v1
 from agent_reach.execution.v1 import (
     EXECUTION_ERROR_CODES,
     FETCHED_DOCUMENT_CAPABILITY,
-    LINKEDIN_MCP_CAPABILITY,
     MCPORTER_ARTIFACTS_CAPABILITY,
     NETWORK_ACCESS_CAPABILITY,
     OPENCLI_SESSION_CAPABILITY,
@@ -31,7 +31,6 @@ from agent_reach.execution.v1 import (
     ExecutionRequestV1,
     ExecutionSuccessV1,
     FetchedDocumentV1,
-    LinkedInMcpV1,
     McporterArtifactsV1,
     NetworkAccessV1,
     OpenCliSessionV1,
@@ -239,18 +238,6 @@ def _xiaohongshu_item() -> ExecutionItemV1:
     )
 
 
-def _linkedin_item(schema_id: str) -> ExecutionItemV1:
-    fields: dict[str, object] = {
-        "url": "https://www.linkedin.com/search/results/people/?keywords=engineer",
-        "sections": '{"search_results":"result"}',
-        "references": None,
-    }
-    if schema_id == "linkedin.jobs.search.document.v1":
-        fields["url"] = "https://www.linkedin.com/jobs/search/?keywords=engineer"
-        fields["job_ids"] = "[]"
-    return ExecutionItemV1(schema_id, fields)  # type: ignore[arg-type]
-
-
 def _xueqiu_item(
     *,
     symbol: str = "SH600519",
@@ -282,19 +269,6 @@ def _opencli_session(root: Path) -> OpenCliSessionV1:
         opencli_cli=str(root / "opencli" / "dist" / "src" / "main.js"),
         opencli_tree_sha256="b" * 64,
         session_home=str(root / "session"),
-    )
-
-
-def _linkedin_service() -> LinkedInMcpV1:
-    return LinkedInMcpV1(
-        endpoint="http://127.0.0.1:8001/mcp",
-        alias_wheel_sha256="2173ead9777f6202fd581b4ec227d7a7212e9798f26f530b3174ff4683797558",
-        backend_wheel_sha256="62a889ac417e5e04d1635d5698df7178edc667a232dca42f417647e2ea25926d",
-        runtime_lock_sha256="9150a44d903ecfecdc48d115b87385bb78f3c69f4067951cf238e7fda6f09a17",
-        source_commit="7edbd32231afa6d40fabad207329591ad5a4feb0",
-        schema_sha256="2549d379d2306ba22c24f06015db67f448d109943fb96f2d656986d2d92f0699",
-        log_level="WARNING",
-        tool_timeout_seconds=12,
     )
 
 
@@ -481,24 +455,6 @@ def test_capability_discovery_is_static_closed_and_io_free(
             )
         ],
         (
-            "linkedin",
-            "search.people",
-            "linkedin.search.people.arguments.v1",
-            ("linkedin.people.search.document.v1",),
-            "linkedin-scraper-mcp",
-            "4.14.0",
-            (MCPORTER_ARTIFACTS_CAPABILITY, LINKEDIN_MCP_CAPABILITY),
-        ),
-        (
-            "linkedin",
-            "search.jobs",
-            "linkedin.search.jobs.arguments.v1",
-            ("linkedin.jobs.search.document.v1",),
-            "linkedin-scraper-mcp",
-            "4.14.0",
-            (MCPORTER_ARTIFACTS_CAPABILITY, LINKEDIN_MCP_CAPABILITY),
-        ),
-        (
             "xueqiu",
             "search.stocks",
             "xueqiu.search.stocks.arguments.v1",
@@ -550,8 +506,6 @@ def test_capability_discovery_is_static_closed_and_io_free(
         50,
         50,
         50,
-        1,
-        1,
         50,
         20,
     ]
@@ -562,7 +516,7 @@ def test_capability_discovery_is_static_closed_and_io_free(
         1_048_576,
         *([524_288] * 7),
         *([1_048_576] * 4),
-        *([524_288] * 20),
+        *([524_288] * 18),
         1_048_576,
         524_288,
     ]
@@ -577,11 +531,36 @@ def test_capability_discovery_is_static_closed_and_io_free(
         2_048,
         *([1_024] * 7),
         *([2_048] * 5),
-        *([2_048] * 21),
+        *([2_048] * 19),
     ]
     assert all(item.maximum_published_characters == 512 for item in capabilities)
     with pytest.raises(FrozenInstanceError):
         capabilities[2].maximum_items = 51  # type: ignore[misc]
+
+
+def test_linkedin_has_no_structured_descriptor_export_or_runtime() -> None:
+    assert all(capability.source != "linkedin" for capability in list_capabilities())
+    assert "LINKEDIN_MCP_CAPABILITY" not in execution_v1.__all__
+    assert "LinkedInMcpV1" not in execution_v1.__all__
+    assert not hasattr(execution_v1, "LINKEDIN_MCP_CAPABILITY")
+    assert not hasattr(execution_v1, "LinkedInMcpV1")
+    execution_file = execution_v1.__file__
+    assert execution_file is not None
+    assert not (Path(execution_file).parent / "linkedin.py").exists()
+
+    result = execute(
+        ExecutionRequestV1(
+            PROTOCOL_VERSION,
+            "linkedin",
+            "search.people",
+            {"query": "closed", "limit": 1},
+        ),
+        ExecutionContextV1(),
+    )
+
+    assert isinstance(result, ExecutionFailureV1)
+    assert result.error_code == "unsupported_source"
+    assert "agent_reach.execution.v1.linkedin" not in sys.modules
 
 
 def test_clean_process_discovery_does_not_import_backend_or_host_config() -> None:
@@ -594,7 +573,7 @@ def denied_home(cls):
     raise AssertionError('ambient home access')
 pathlib.Path.home = classmethod(denied_home)
 from agent_reach.execution.v1 import list_capabilities
-assert len(list_capabilities()) == 35
+assert len(list_capabilities()) == 33
 assert 'feedparser' not in sys.modules
 assert not any(name == 'bili_cli' or name.startswith('bili_cli.') for name in sys.modules)
 assert not any(name == 'yt_dlp' or name.startswith('yt_dlp.') for name in sys.modules)
@@ -607,7 +586,6 @@ assert 'agent_reach.execution.v1.v2ex' not in sys.modules
 assert 'agent_reach.execution.v1._v2ex_transport' not in sys.modules
 assert 'agent_reach.execution.v1.exa' not in sys.modules
 assert 'agent_reach.execution.v1.opencli_social' not in sys.modules
-assert 'agent_reach.execution.v1.linkedin' not in sys.modules
 assert 'agent_reach.execution.v1.xueqiu' not in sys.modules
 assert 'httpcore' not in sys.modules
 assert 'agent_reach.config' not in sys.modules
@@ -1149,20 +1127,6 @@ def test_xueqiu_result_contract_rejects_runtime_invalid_symbol_grammar(
     [
         ("twitter", "search.posts", "opencli", "1.8.6-hermes.1", _xiaohongshu_item()),
         ("xiaohongshu", "search.notes", "opencli", "1.8.6-hermes.1", _twitter_item()),
-        (
-            "linkedin",
-            "search.people",
-            "linkedin-scraper-mcp",
-            "4.14.0",
-            _linkedin_item("linkedin.jobs.search.document.v1"),
-        ),
-        (
-            "linkedin",
-            "search.jobs",
-            "linkedin-scraper-mcp",
-            "4.14.0",
-            _linkedin_item("linkedin.people.search.document.v1"),
-        ),
         ("xueqiu", "search.stocks", "xueqiu-api", "1.5.0+search.v1", _exa_code_item()),
         ("exa", "search.code", "exa-mcporter", "0.12.3+exa-code.v1", _exa_item()),
     ],
@@ -1549,36 +1513,6 @@ def test_fetched_document_rejects_unsafe_metadata(
         (
             ExecutionRequestV1(
                 PROTOCOL_VERSION,
-                "linkedin",
-                "search.people",
-                {"query": "query", "limit": 1},
-            ),
-            ExecutionContextV1(
-                (
-                    _linkedin_service(),
-                    _mcporter_artifacts(Path("/opt/agent-reach")),
-                )
-            ),
-            "invalid_request",
-        ),
-        (
-            ExecutionRequestV1(
-                PROTOCOL_VERSION,
-                "linkedin",
-                "search.jobs",
-                {"query": "query", "limit": 1, "method": "send_message"},
-            ),
-            ExecutionContextV1(
-                (
-                    _mcporter_artifacts(Path("/opt/agent-reach")),
-                    _linkedin_service(),
-                )
-            ),
-            "invalid_request",
-        ),
-        (
-            ExecutionRequestV1(
-                PROTOCOL_VERSION,
                 "xueqiu",
                 "search.stocks",
                 {"query": "query", "limit": 0},
@@ -1621,7 +1555,6 @@ def test_dispatch_rejects_unknown_authority_before_backend_import(
         if level == 1 and name in {
             "bilibili",
             "exa",
-            "linkedin",
             "opencli_social",
             "rss",
             "v2ex",
@@ -1706,30 +1639,6 @@ def test_host_cancellation_propagates_without_backend_execution() -> None:
                 {"query": "query", "limit": 1},
             ),
             (_opencli_session(Path("/opt/opencli-xiaohongshu")),),
-        ),
-        (
-            ExecutionRequestV1(
-                PROTOCOL_VERSION,
-                "linkedin",
-                "search.people",
-                {"query": "query", "limit": 1},
-            ),
-            (
-                _mcporter_artifacts(Path("/opt/linkedin-people")),
-                _linkedin_service(),
-            ),
-        ),
-        (
-            ExecutionRequestV1(
-                PROTOCOL_VERSION,
-                "linkedin",
-                "search.jobs",
-                {"query": "query", "limit": 1},
-            ),
-            (
-                _mcporter_artifacts(Path("/opt/linkedin-jobs")),
-                _linkedin_service(),
-            ),
         ),
         (
             ExecutionRequestV1(

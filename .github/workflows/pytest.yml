@@ -66,11 +66,11 @@ jobs:
               "agent_reach/execution/v1/exa.py",
               "agent_reach/execution/v1/opencli_social.py",
               "agent_reach/execution/v1/_opencli_no_lifecycle.mjs",
-              "agent_reach/execution/v1/linkedin.py",
               "agent_reach/execution/v1/xueqiu.py",
           )
           for name in required_execution_files:
               assert name in names, f"{name} missing from wheel"
+          assert "agent_reach/execution/v1/linkedin.py" not in names
           for prefix in ("agent_reach/guides/", "agent_reach/scripts/", "agent_reach/skill/references/"):
               assert any(n.startswith(prefix) for n in names), f"{prefix} missing from wheel"
           print(f"wheel OK: {len(names)} entries, no duplicates, data files present")
@@ -88,6 +88,7 @@ jobs:
           cd /tmp
           /tmp/smoke/bin/python - <<'PY'
           import hashlib
+          import importlib.util
           import os
           import socket
           import sys
@@ -101,7 +102,6 @@ jobs:
           import agent_reach.execution.v1 as execution_v1
           from agent_reach.execution.v1 import (
               MCPORTER_ARTIFACTS_CAPABILITY,
-              LINKEDIN_MCP_CAPABILITY,
               NETWORK_ACCESS_CAPABILITY,
               OPENCLI_SESSION_CAPABILITY,
               PRIVATE_WORKSPACE_CAPABILITY,
@@ -112,7 +112,6 @@ jobs:
               ExecutionRequestV1,
               ExecutionSuccessV1,
               McporterArtifactsV1,
-              LinkedInMcpV1,
               NetworkAccessV1,
               OpenCliSessionV1,
               PrivateWorkspaceV1,
@@ -128,24 +127,25 @@ jobs:
               "agent_reach.execution.v1._v2ex_transport",
               "agent_reach.execution.v1.exa",
               "agent_reach.execution.v1.opencli_social",
-              "agent_reach.execution.v1.linkedin",
               "agent_reach.execution.v1.xueqiu",
           }
           assert runtime_modules.isdisjoint(sys.modules)
           assert "deno" not in sys.modules
           assert {
               "MCPORTER_ARTIFACTS_CAPABILITY",
-              "LINKEDIN_MCP_CAPABILITY",
               "OPENCLI_SESSION_CAPABILITY",
               "PRIVATE_WORKSPACE_CAPABILITY",
               "XUEQIU_SESSION_CAPABILITY",
-              "LinkedInMcpV1",
               "McporterArtifactsV1",
               "OpenCliSessionV1",
               "PrivateWorkspaceV1",
               "XueqiuSessionV1",
           } <= set(execution_v1.__all__)
-          assert execution_v1.LinkedInMcpV1 is LinkedInMcpV1
+          assert "LINKEDIN_MCP_CAPABILITY" not in execution_v1.__all__
+          assert "LinkedInMcpV1" not in execution_v1.__all__
+          assert not hasattr(execution_v1, "LINKEDIN_MCP_CAPABILITY")
+          assert not hasattr(execution_v1, "LinkedInMcpV1")
+          assert importlib.util.find_spec("agent_reach.execution.v1.linkedin") is None
           assert execution_v1.McporterArtifactsV1 is McporterArtifactsV1
           assert execution_v1.OpenCliSessionV1 is OpenCliSessionV1
           assert execution_v1.PrivateWorkspaceV1 is PrivateWorkspaceV1
@@ -195,8 +195,6 @@ jobs:
               ("instagram", "browse.explore"),
               ("twitter", "search.posts"),
               ("xiaohongshu", "search.notes"),
-              ("linkedin", "search.people"),
-              ("linkedin", "search.jobs"),
               ("xueqiu", "search.stocks"),
               ("exa", "search.code"),
           )
@@ -256,22 +254,6 @@ jobs:
                   "0.12.3+exa-web.v1",
                   (NETWORK_ACCESS_CAPABILITY, MCPORTER_ARTIFACTS_CAPABILITY),
                   20,
-              ),
-              ("linkedin", "search.people"): (
-                  "linkedin.search.people.arguments.v1",
-                  ("linkedin.people.search.document.v1",),
-                  "linkedin-scraper-mcp",
-                  "4.14.0",
-                  (MCPORTER_ARTIFACTS_CAPABILITY, LINKEDIN_MCP_CAPABILITY),
-                  1,
-              ),
-              ("linkedin", "search.jobs"): (
-                  "linkedin.search.jobs.arguments.v1",
-                  ("linkedin.jobs.search.document.v1",),
-                  "linkedin-scraper-mcp",
-                  "4.14.0",
-                  (MCPORTER_ARTIFACTS_CAPABILITY, LINKEDIN_MCP_CAPABILITY),
-                  1,
               ),
               ("xueqiu", "search.stocks"): (
                   "xueqiu.search.stocks.arguments.v1",
@@ -339,7 +321,6 @@ jobs:
 
           import agent_reach.execution.v1._v2ex_transport as v2ex_transport
           import agent_reach.execution.v1.exa as exa_execution
-          import agent_reach.execution.v1.linkedin as linkedin_execution
           import agent_reach.execution.v1.opencli_social as opencli_execution
           import agent_reach.execution.v1.v2ex as v2ex_execution
           import agent_reach.execution.v1.xueqiu as xueqiu_execution
@@ -353,7 +334,6 @@ jobs:
               v2ex_transport: "_v2ex_transport.py",
               exa_execution: "exa.py",
               opencli_execution: "opencli_social.py",
-              linkedin_execution: "linkedin.py",
               xueqiu_execution: "xueqiu.py",
           }
           for module, name in expected_runtime_files.items():
@@ -391,10 +371,6 @@ jobs:
               (youtube_execution.execute_youtube, "agent_reach.execution.v1.youtube"),
               (v2ex_execution.execute_v2ex, "agent_reach.execution.v1.v2ex"),
               (exa_execution.execute_exa, "agent_reach.execution.v1.exa"),
-              (
-                  linkedin_execution.execute_linkedin,
-                  "agent_reach.execution.v1.linkedin",
-              ),
               (
                   opencli_execution.execute_opencli_social,
                   "agent_reach.execution.v1.opencli_social",
@@ -499,5 +475,15 @@ jobs:
           assert downloader.params["remote_components"] == []
           assert plugin_dirs.value == []
           assert os.environ["YTDLP_NO_PLUGINS"] == "1"
-          print("installed wheel exposes 35 descriptors and closed execution runtimes OK")
+          linkedin_failure = execute(
+              ExecutionRequestV1(
+                  PROTOCOL_VERSION,
+                  "linkedin",
+                  "search.people",
+                  {"query": "closed", "limit": 1},
+              ),
+              ExecutionContextV1(),
+          )
+          assert linkedin_failure.error_code == "unsupported_source"
+          print("installed wheel exposes 33 descriptors and no LinkedIn execution runtime OK")
           PY
