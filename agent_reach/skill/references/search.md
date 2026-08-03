@@ -8,8 +8,8 @@ Exa AI 搜索引擎。
 
 ```bash
 mcporter call 'exa.web_search_exa(query: "query", numResults: 5)'
-mcporter --http-url 'https://mcp.exa.ai/mcp?tools=get_code_context_exa' \
-  call 'exa.get_code_context_exa(query: "code question", numResults: 5)'
+mcporter call --http-url 'https://mcp.exa.ai/mcp?tools=get_code_context_exa' \
+  'exa.get_code_context_exa(query: "code question", numResults: 5)'
 ```
 
 ### 使用场景

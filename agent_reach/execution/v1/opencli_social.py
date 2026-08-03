@@ -1737,7 +1737,7 @@ def _project_twitter_posts(
         identities.add(native_id)
         if _twitter_post_id(row["url"]) != native_id:
             raise _BackendContractError("twitter identity invalid")
-        _optional_text(row["bio"], maximum_text, state)
+        _optional_text(row["bio"], maximum_text, _ProjectionState())
         _validate_twitter_native_media(row)
         has_media = row["has_media"]
         if type(has_media) is not bool:

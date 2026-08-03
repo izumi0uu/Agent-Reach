@@ -13,6 +13,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 import pytest
+import tomli
 
 import agent_reach.execution.v1 as execution_v1
 from agent_reach.execution.v1 import (
@@ -47,9 +48,10 @@ ATOM = b"""<?xml version="1.0" encoding="utf-8"?>
 
 
 def test_sdist_excludes_worktree_git_pointer() -> None:
-    pyproject = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    config = tomli.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert '[tool.hatch.build.targets.sdist]\nexclude = ["/.git"]' in pyproject
+    assert config["tool"]["hatch"]["build"]["targets"]["sdist"]["exclude"] == ["/.git"]
 
 
 def _document() -> FetchedDocumentV1:
